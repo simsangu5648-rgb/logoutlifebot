@@ -1,0 +1,16 @@
+{
+  "name": "logoutlife-bot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "로그아웃라이프 디스코드 - 누적 체크인 기반 등급 자동승급 + 결제전환 DM 봇",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.15.3",
+    "dotenv": "^16.4.5",
+    "node-cron": "^3.0.3"
+  }
+}
