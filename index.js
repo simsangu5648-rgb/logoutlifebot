@@ -891,7 +891,9 @@ async function formBuddyGroup(guild, memberIds) {
 // ── 즉시반응 시스템: 최근 활동한 그로우/마스터-크루에게 조용히 알림 ──
 async function notifyHelpers(message) {
   const guild = message.guild;
-  const roleIds = [ROLE_ID_GROW, ROLE_ID_MASTER].filter(Boolean);
+  // 그로우-크루/마스터-크루뿐 아니라, 무료회원 중 가장 활발한 베테랑(90회+) 등급도
+  // SOS 도움 요청에 응답해줄 수 있는 헬퍼 풀에 포함합니다.
+  const roleIds = [ROLE_ID_GROW, ROLE_ID_MASTER, process.env.ROLE_ID_FREE_LV4].filter(Boolean);
   if (roleIds.length === 0) return;
 
   const members = await guild.members.fetch();
