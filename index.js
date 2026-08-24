@@ -396,7 +396,8 @@ client.on(Events.MessageCreate, async (message) => {
           `${describeNextLevelProgress(message.member, user)}\n` +
           `현재 연속: ${user.currentStreak || 0}일 🔥\n` +
           `최고 기록: ${user.longestStreak || 0}일\n` +
-          `이번 달: ${thisMonthCount}회`
+          `이번 달: ${thisMonthCount}회\n` +
+          `🙏 도움 포인트: 이번 주 ${user.weeklyHelperPoints || 0}점 (누적 ${user.totalHelperPoints || 0}점)`
       );
       return;
     }
@@ -1075,6 +1076,8 @@ client.on(Events.MessageReactionAdd, async (reaction, reactUser) => {
       weeklyHelperPoints: (u.weeklyHelperPoints || 0) + 1,
       totalHelperPoints: (u.totalHelperPoints || 0) + 1,
     });
+    // 포인트가 실제로 반영됐다는 걸 바로 눈으로 확인할 수 있도록, 봇이 체크 표시를 남겨요.
+    await safeReact(message, "✅");
   } catch (e) {
     console.error("[감사 리액션 처리 오류]", e);
   }
