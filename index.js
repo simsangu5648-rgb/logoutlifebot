@@ -138,11 +138,12 @@ const ANNOUNCE_CHANNEL_NAME = process.env.ANNOUNCE_CHANNEL_NAME || "자유수다
 const HELPER_THANKS_EMOJI = process.env.HELPER_THANKS_EMOJI || "🙏";
 const HONOR_CHANNEL_NAME = process.env.HONOR_CHANNEL_NAME || "명예의-전당";
 
-// ── 버디 그룹 ───────────────────────────────────────────────
-// 첫 체크인을 한 멤버가 이만큼 모이면 자동으로 역할+비공개 채널을 만들어 묶어줍니다.
+// ── 리부트 버디 그룹 (그로우-크루 전용) ─────────────────────────
+// 전자책을 구매해 그로우-크루가 된 멤버가 이만큼 모이면 자동으로 역할+비공개 채널을 만들어 묶어줍니다.
+// 무료멤버 대상 버디 그룹은 폐지되었고, 이제 결제(리부트 시작) 시점에만 대기열에 들어갑니다.
 // 봇에게 "채널 관리(Manage Channels)" 권한이 필요합니다.
 const BUDDY_GROUP_SIZE = parseInt(process.env.BUDDY_GROUP_SIZE || "5", 10);
-const BUDDY_CATEGORY_NAME = process.env.BUDDY_CATEGORY_NAME || "버디 그룹";
+const BUDDY_CATEGORY_NAME = process.env.BUDDY_CATEGORY_NAME || "리부트 버디 그룹";
 const BUDDY_GROUPS_ENABLED = process.env.BUDDY_GROUPS_ENABLED !== "false";
 
 // ── 주간 팁 & 회고 ──────────────────────────────────────────
@@ -384,11 +385,6 @@ client.on(Events.MessageCreate, async (message) => {
       );
     }
 
-    if (newCount === 1 && BUDDY_GROUPS_ENABLED) {
-      // 첫 체크인 - 버디 그룹 대기열에 추가 (그룹 인원이 차면 자동으로 채널을 만들어드려요)
-      addMemberToBuddyPool(message.guild, member).catch((e) => console.error("[버디풀 처리 오류]", e));
-    }
-
     const isGrowOrAbove = member.roles.cache.has(ROLE_ID_GROW) || member.roles.cache.has(ROLE_ID_MASTER);
 
     if (!isGrowOrAbove) {
@@ -612,6 +608,11 @@ async function promoteToGrowCrewByEbook(discordUserId) {
     }
     await member.roles.add(ROLE_ID_GROW).catch((e) => console.error("[역할부여 실패] 그로우-크루(전자책)", e));
     await safeDM(member, `전자책 구매가 확인됐어요! 그로우-크루로 승급했어요 🎉 #그로우-라운지 채널이 열렸습니다.`);
+
+    if (BUDDY_GROUPS_ENABLED) {
+      // 전자책 구매(리부트 시작) 시점에 리부트 버디 그룹 대기열에 추가 (그룹 인원이 차면 자동으로 채널을 만들어드려요)
+      addMemberToBuddyPool(guild, member).catch((e) => console.error("[버디풀 처리 오류]", e));
+    }
     if (EBOOK_DOWNLOAD_URL) {
       await safeDM(member, `📘 **${EBOOK_NAME}** 다운로드 링크예요 👇\n${EBOOK_DOWNLOAD_URL}`);
     } else {
@@ -708,7 +709,7 @@ async function escalateToOnCall(message) {
   await channel.send(`🚨 <@&${ONCALL_ROLE_ID}> #${SOS_CHANNEL_NAME}에 새 SOS 요청이 있어요.\n${message.url}`);
 }
 
-// ── 버디 그룹: 첫 체크인한 멤버들을 모아 자동으로 소그룹(역할+비공개 채널)을 만듭니다 ──
+// ── 리부트 버디 그룹: 전자책을 구매한(그로우-크루) 멤버들을 모아 자동으로 소그룹(역할+비공개 채널)을 만듭니다 ──
 async function addMemberToBuddyPool(guild, member) {
   const pool = addToBuddyPool(member.id);
   if (pool.length < BUDDY_GROUP_SIZE) return;
@@ -723,11 +724,11 @@ async function addMemberToBuddyPool(guild, member) {
 
 async function formBuddyGroup(guild, memberIds) {
   const groupNumber = nextBuddyGroupNumber();
-  const roleName = `버디-${groupNumber}`;
-  const channelName = `버디-그룹-${groupNumber}`;
+  const roleName = `리부트버디-${groupNumber}`;
+  const channelName = `리부트-버디-${groupNumber}`;
 
   try {
-    const role = await guild.roles.create({ name: roleName, mentionable: true, reason: "버디 그룹 자동 생성" });
+    const role = await guild.roles.create({ name: roleName, mentionable: true, reason: "리부트 버디 그룹 자동 생성" });
 
     let category = guild.channels.cache.find(
       (c) => c.name === BUDDY_CATEGORY_NAME && c.type === ChannelType.GuildCategory
@@ -736,7 +737,7 @@ async function formBuddyGroup(guild, memberIds) {
       category = await guild.channels.create({
         name: BUDDY_CATEGORY_NAME,
         type: ChannelType.GuildCategory,
-        reason: "버디 그룹 카테고리 자동 생성",
+        reason: "리부트 버디 그룹 카테고리 자동 생성",
       });
     }
 
@@ -759,7 +760,7 @@ async function formBuddyGroup(guild, memberIds) {
       type: ChannelType.GuildText,
       parent: category.id,
       permissionOverwrites: overwrites,
-      reason: "버디 그룹 채널 자동 생성",
+      reason: "리부트 버디 그룹 채널 자동 생성",
     });
 
     const mentions = [];
@@ -773,12 +774,16 @@ async function formBuddyGroup(guild, memberIds) {
 
     await channel.send(
       `👋 ${mentions.join(" ")}\n` +
-        `같은 시기에 시작한 분들끼리 작은 버디 그룹으로 묶어드렸어요! 여기서 서로 안부도 묻고, 오늘 인증한 거 자랑도 하고, 힘들 때 서로 챙겨주세요.\n` +
+        `비슷한 시기에 전자책을 구매하고 리부트를 시작한 분들끼리 작은 버디 그룹으로 묶어드렸어요!\n\n` +
+        `이 채널은 이렇게 쓰시면 좋아요.\n` +
+        `- 오늘 인증한 스크린샷이나 짧은 한 줄을 여기에도 남겨보세요. 같은 걸 겪는 사람들이 보면 그 자체로 자극이 돼요.\n` +
+        `- 힘든 날엔 여기서 먼저 말을 걸어보세요. 제일 잘 이해해줄 사람들이에요.\n` +
+        `- 가끔 서로 안부만 물어봐도 충분해요. 정해진 규칙은 없어요.\n\n` +
         `혼자보다 몇 명이서 같이 하는 게 훨씬 오래갑니다 🙂`
     );
-    console.log(`[버디그룹 생성] ${roleName} / ${channelName} (${memberIds.length}명)`);
+    console.log(`[리부트버디그룹 생성] ${roleName} / ${channelName} (${memberIds.length}명)`);
   } catch (e) {
-    console.error("[버디그룹 생성 실패] (봇에 '채널 관리' 권한이 있는지 확인해주세요)", e);
+    console.error("[리부트버디그룹 생성 실패] (봇에 '채널 관리' 권한이 있는지 확인해주세요)", e);
   }
 }
 
