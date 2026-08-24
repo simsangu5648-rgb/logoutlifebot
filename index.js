@@ -142,6 +142,9 @@ const ANNOUNCE_CHANNEL_NAME = process.env.ANNOUNCE_CHANNEL_NAME || "자유수다
 const HELPER_THANKS_EMOJI = process.env.HELPER_THANKS_EMOJI || "🙏";
 const HONOR_CHANNEL_NAME = process.env.HONOR_CHANNEL_NAME || "명예의-전당";
 
+// ── 베테랑(무료 등급 최고 단계) 달성 축하 ─────────────────────
+const VETERAN_LOUNGE_CHANNEL_NAME = process.env.VETERAN_LOUNGE_CHANNEL_NAME || "베테랑-라운지";
+
 // ── 리부트 버디 그룹 (그로우-크루 전용) ─────────────────────────
 // 전자책을 구매해 그로우-크루가 된 멤버가 이만큼 모이면 자동으로 역할+비공개 채널을 만들어 묶어줍니다.
 // 무료멤버 대상 버디 그룹은 폐지되었고, 이제 결제(리부트 시작) 시점에만 대기열에 들어갑니다.
@@ -493,11 +496,40 @@ async function syncFreeLevel(member, cumulativeCount) {
   }
   await member.roles.add(target.roleId).catch((e) => console.error(`[무료등급 역할부여 실패] ${target.label}`, e));
   const user = getUser(member.id);
-  await safeDM(
-    member,
-    `🌱 활동 등급이 "${target.label}"(으)로 올랐어요! (누적 인증 ${cumulativeCount}회)\n${describeNextLevelProgress(member, user)}`
-  );
+
+  if (target.key === "lv4") {
+    // 무료 등급 중 최고 단계(베테랑) 달성은 따로 더 신경 써서 축하해줍니다.
+    await safeDM(
+      member,
+      `🔥 축하해요! 누적 인증 ${cumulativeCount}회를 채워서 무료 등급 중 최고 단계인 "베테랑"에 도달했어요.\n` +
+        `이제 #${VETERAN_LOUNGE_CHANNEL_NAME} 채널이 열렸고, #${SOS_CHANNEL_NAME} 헬퍼 알림 대상에도 포함돼요 — 도움받던 입장에서 이제 도움을 줄 수 있는 차례예요.\n` +
+        `여기까지 꾸준히 오신 것 자체가 정말 대단한 거예요. 혹시 다음 단계가 궁금하시면, 전자책을 구매하면 바로 그로우-크루로 승급돼요 (DM으로 "구매"라고 보내보세요).`
+    );
+    await announceVeteranAchievement(member.guild, member, cumulativeCount);
+  } else {
+    await safeDM(
+      member,
+      `🌱 활동 등급이 "${target.label}"(으)로 올랐어요! (누적 인증 ${cumulativeCount}회)\n${describeNextLevelProgress(member, user)}`
+    );
+  }
   console.log(`[등급변경] ${member.user.tag} → ${target.label} (누적 ${cumulativeCount}회)`);
+}
+
+// ── 베테랑 달성 알림: 명예의-전당에 소개 ─────────────────────
+async function announceVeteranAchievement(guild, member, cumulativeCount) {
+  try {
+    const u = getUser(member.id);
+    if (u.publicAnnounceOptOut) return;
+    const channel = guild.channels.cache.find(
+      (c) => c.name === HONOR_CHANNEL_NAME && typeof c.send === "function"
+    );
+    if (!channel) return;
+    await channel.send(
+      `🔥 **${member.displayName}**님이 무료 등급 중 최고 단계인 베테랑(누적 인증 ${cumulativeCount}회)을 달성했어요! 꾸준함이 만든 결과예요, 축하해주세요 👏`
+    );
+  } catch (e) {
+    console.error("[베테랑 달성 알림 실패]", e);
+  }
 }
 
 function describeCurrentLevel(member, user) {
