@@ -103,6 +103,10 @@ const EBOOK_PRICE = process.env.EBOOK_PRICE;
 const EBOOK_DOWNLOAD_URL = process.env.EBOOK_DOWNLOAD_URL || "";
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || "").replace(/\/+$/, "");
 const EBOOK_PURCHASE_COMMANDS = ["구매", "!구매", "전자책구매", "전자책 구매"];
+// 결제 전 소개/랜딩 페이지. 설정하면 DM "구매"에 결제 링크를 바로 주는 대신
+// 이 페이지 링크(본인 uid 포함)를 먼저 보내고, 페이지의 구매 버튼이
+// "/go/:discordUserId" 라우트를 거쳐 실제 결제 페이지로 연결됩니다.
+const LANDING_PAGE_URL = (process.env.LANDING_PAGE_URL || "").replace(/\/+$/, "");
 
 // ── 전자책 무료 미리보기 (파일 직접 첨부) ────────────────────
 const EBOOK_PREVIEW_COMMANDS = ["미리보기", "!미리보기", "전자책미리보기", "전자책 미리보기"];
@@ -560,6 +564,23 @@ async function handleEbookPurchaseRequest(message) {
     return;
   }
 
+  // LANDING_PAGE_URL이 설정되어 있으면, 결제 링크를 바로 주는 대신
+  // 소개 페이지(본인 uid 포함)를 먼저 보냅니다. 페이지의 구매 버튼이
+  // "/go/:discordUserId"를 거쳐 그때그때 새 결제 링크를 받아 이동해요.
+  if (LANDING_PAGE_URL) {
+    const sep = LANDING_PAGE_URL.includes("?") ? "&" : "?";
+    const personalizedUrl = `${LANDING_PAGE_URL}${sep}uid=${message.author.id}`;
+    await message.reply(
+      `📘 **${EBOOK_NAME}** 소개 페이지예요 👇 (본인 전용 링크라 다른 분과 공유하지 말아주세요)\n${personalizedUrl}\n\n` +
+        `페이지를 다 보시고 "지금 리부트 시작하기" 버튼을 누르면 결제 페이지로 바로 넘어가요. 결제를 완료하시면,\n` +
+        `1) 자동으로 그로우-크루로 승급되고 (#그로우-라운지 채널 오픈 + 공개 축하)\n` +
+        `2) 전자책 다운로드 링크를 이 DM으로 바로 보내드려요.\n` +
+        `별도로 다시 뭘 누르실 필요 없이, 결제만 하시면 끝이에요!`
+    );
+    return;
+  }
+
+  // LANDING_PAGE_URL 미설정 시에는 기존 방식대로 결제 링크를 DM에 바로 보냅니다.
   try {
     const payUrl = await createPayAppPaymentLink(message.author.id);
     if (!payUrl) {
@@ -725,6 +746,45 @@ app.post("/payapp/feedback", async (req, res) => {
   } catch (e) {
     console.error("[PayApp 웹훅 처리 오류]", e);
     res.status(200).send("SUCCESS");
+  }
+});
+
+// ── 랜딩페이지 구매 버튼 → 결제 페이지 리다이렉트 ────────────────
+// 랜딩페이지의 구매 버튼이 이 주소로 연결됩니다. PayApp 결제 링크는
+// 1회용이라 미리 만들어두지 않고, 버튼을 누른 바로 이 시점에 새로 생성해서
+// 곧장 그 결제 페이지로 이동(302)시킵니다. 비밀키(PAYAPP_LINKKEY 등)는
+// 이 서버 밖으로 절대 나가지 않습니다.
+app.get("/go/:discordUserId", async (req, res) => {
+  const discordUserId = (req.params.discordUserId || "").trim();
+  const backToDiscordMsg =
+    "디스코드로 돌아가서 봇에게 다시 \"구매\"라고 DM을 보내주세요.";
+
+  if (!discordUserId) {
+    return res.status(400).send(`요청이 올바르지 않아요. ${backToDiscordMsg}`);
+  }
+
+  try {
+    const user = getUser(discordUserId);
+    if (user.ebookPurchased) {
+      return res
+        .status(200)
+        .send("이미 구매를 완료하고 그로우-크루로 승급하셨어요! 디스코드로 돌아가서 #그로우-라운지를 확인해보세요.");
+    }
+
+    if (!PAYAPP_USERID || !PAYAPP_LINKKEY || !PAYAPP_LINKVAL || !EBOOK_PRICE || !PUBLIC_BASE_URL) {
+      return res.status(503).send(`아직 결제 기능이 준비 중이에요. ${backToDiscordMsg}`);
+    }
+
+    const payUrl = await createPayAppPaymentLink(discordUserId);
+    if (!payUrl) {
+      console.error("[/go 리다이렉트] 결제 링크 생성 실패", discordUserId);
+      return res.status(502).send(`결제 링크 생성에 실패했어요. ${backToDiscordMsg}`);
+    }
+
+    res.redirect(302, payUrl);
+  } catch (e) {
+    console.error("[/go 리다이렉트 오류]", e);
+    res.status(500).send(`오류가 발생했어요. ${backToDiscordMsg}`);
   }
 });
 
