@@ -269,6 +269,8 @@ client.on(Events.MessageCreate, async (message) => {
         await handleEbookPreviewRequest(message);
       } else if (content === "회고" || content === "!회고") {
         await handleReflectionHistoryRequest(message);
+      } else if (content === "패턴" || content === "!패턴") {
+        await handleSosPatternHistoryRequest(message);
       } else {
         await handlePendingDmReply(message, content);
       }
@@ -482,7 +484,7 @@ async function handlePendingDmReply(message, content) {
   ) {
     const sosTriggers = [...(user.sosTriggers || []), { date: todayKST(), note: content.slice(0, 300) }];
     updateUser(message.author.id, { sosTriggers, awaitingTriggerReply: false, triggerPromptSentAt: null });
-    await message.reply("남겨주셔서 고마워요. 나중에 스스로 패턴을 돌아볼 때 도움이 될 거예요 🙂");
+    await message.reply('남겨주셔서 고마워요. "패턴"이라고 보내시면 지금까지 남긴 기록을 다시 볼 수 있어요 🙂');
     return;
   }
 
@@ -510,6 +512,38 @@ async function handleReflectionHistoryRequest(message) {
   }
   const text = recent.map((r) => `**${r.week}**: ${r.text}`).join("\n\n");
   await message.reply(`📝 최근에 남긴 회고예요\n\n${text}`);
+}
+
+// ── SOS 트리거 기록 다시 보기 (DM "패턴") ──────────────────────
+async function handleSosPatternHistoryRequest(message) {
+  const user = getUser(message.author.id);
+  const all = user.sosTriggers || [];
+  if (all.length === 0) {
+    await message.reply(
+      '아직 남겨주신 SOS 기록이 없어요. #충동-sos에 글을 남기시면 봇이 DM으로 "어떤 상황이었는지" 물어봐요 — 답해주시면 여기 쌓여요!'
+    );
+    return;
+  }
+
+  const recent = [...all].slice(-5).reverse();
+  const text = recent.map((t) => `**${t.date}**: ${t.note}`).join("\n\n");
+
+  // 아주 가벼운 패턴 힌트: 요일별로 몇 번씩 남겼는지 세어봅니다.
+  const WEEKDAY_LABELS = ["일", "월", "화", "수", "목", "금", "토"];
+  const dayCounts = {};
+  for (const t of all) {
+    const d = new Date(`${t.date}T00:00:00+09:00`);
+    if (Number.isNaN(d.getTime())) continue;
+    const label = WEEKDAY_LABELS[d.getDay()];
+    dayCounts[label] = (dayCounts[label] || 0) + 1;
+  }
+  const sortedDays = Object.entries(dayCounts).sort((a, b) => b[1] - a[1]);
+  const insight =
+    sortedDays.length > 0 && sortedDays[0][1] >= 2
+      ? `\n\n📊 지금까지 남기신 기록 중 **${sortedDays[0][0]}요일**이 ${sortedDays[0][1]}번으로 가장 잦았어요.`
+      : "";
+
+  await message.reply(`🫂 최근 남기신 SOS 기록이에요 (총 ${all.length}개 중 최근 ${recent.length}개)\n\n${text}${insight}`);
 }
 
 // ── 전자책 구매(그로우-크루 승급) ────────────────────────────
