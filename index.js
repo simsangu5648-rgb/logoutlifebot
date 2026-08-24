@@ -21,6 +21,9 @@ const {
   addToBuddyPool,
   clearBuddyPool,
   nextBuddyGroupNumber,
+  getBuddyGroups,
+  addBuddyGroupRecord,
+  removeBuddyGroupRecord,
 } = require("./lib/store");
 
 const {
@@ -152,6 +155,19 @@ const VETERAN_LOUNGE_CHANNEL_NAME = process.env.VETERAN_LOUNGE_CHANNEL_NAME || "
 const BUDDY_GROUP_SIZE = parseInt(process.env.BUDDY_GROUP_SIZE || "5", 10);
 const BUDDY_CATEGORY_NAME = process.env.BUDDY_CATEGORY_NAME || "리부트 버디 그룹";
 const BUDDY_GROUPS_ENABLED = process.env.BUDDY_GROUPS_ENABLED !== "false";
+
+// 버디 그룹 채팅방이 대화 없이 조용해지지 않도록, 매주 한 번씩 봇이 안부 메시지를 보냅니다.
+const BUDDY_CHECKIN_CRON = process.env.BUDDY_CHECKIN_CRON || "0 20 * * 3"; // 기본: 매주 수요일 저녁 8시
+const BUDDY_CHECKIN_MESSAGES = [
+  "이번 주는 다들 어떻게 지내고 계세요? 짧게라도 안부 한마디 남겨주세요 🙂",
+  "오늘 인증한 거 있으면 여기에도 슬쩍 공유해봐요. 서로 보면 은근 힘이 돼요.",
+  "이번 주 컨디션은 어떤가요? 잘 되고 있는 것도, 힘든 것도 편하게 나눠주세요.",
+  "다들 잘 지내고 계신가요? 오늘 하루 어땠는지 한 줄씩 남겨봐요.",
+  "버디 여러분, 이번 주 목표 잘 지키고 계세요? 서로 응원 한마디씩 남겨주세요 💪",
+  "요즘 가장 힘든 순간이 언제인지, 그리고 어떻게 넘기고 있는지 나눠보면 어떨까요?",
+  "이번 주도 다들 고생 많으셨어요. 스스로 잘한 점 하나씩만 남겨볼까요?",
+  "오랜만에 조용했네요 🙂 다들 잘 지내고 계신지 안부 여쭤봐요.",
+];
 
 // ── 주간 팁 & 회고 ──────────────────────────────────────────
 const REFLECTION_REPLY_WINDOW_HOURS = parseInt(process.env.REFLECTION_REPLY_WINDOW_HOURS || "24", 10);
@@ -298,6 +314,7 @@ client.once(Events.ClientReady, (c) => {
   scheduleWeeklyHighlightJob();
   scheduleWeeklyTipJob();
   scheduleWeeklyChallengeJob();
+  scheduleBuddyCheckinJob();
 });
 
 // ── 신규 멤버 자동 역할 부여 ───────────────────────────────
@@ -973,6 +990,7 @@ async function formBuddyGroup(guild, memberIds) {
         `- 가끔 서로 안부만 물어봐도 충분해요. 정해진 규칙은 없어요.\n\n` +
         `혼자보다 몇 명이서 같이 하는 게 훨씬 오래갑니다 🙂`
     );
+    addBuddyGroupRecord({ groupNumber, channelId: channel.id, roleId: role.id });
     console.log(`[리부트버디그룹 생성] ${roleName} / ${channelName} (${memberIds.length}명)`);
   } catch (e) {
     console.error("[리부트버디그룹 생성 실패] (봇에 '채널 관리' 권한이 있는지 확인해주세요)", e);
@@ -1342,6 +1360,36 @@ async function runWeeklyChallengeJob() {
   await channel
     .send(`🎯 이번 주 챌린지\n\n${challenge}\n\n완료했다면 ${verifyMention} 에서 인증해주세요!`)
     .catch((e) => console.error("[주간 챌린지 발행 실패]", e));
+}
+
+// ── 버디 그룹 채널 주간 안부: 채팅방이 조용해지지 않도록 매주 한 번 메시지를 보냅니다 ──
+function scheduleBuddyCheckinJob() {
+  cron.schedule(
+    BUDDY_CHECKIN_CRON,
+    () => runBuddyCheckinJob().catch((e) => console.error("[버디 안부 오류]", e)),
+    { timezone: TZ }
+  );
+  console.log(`[예약 등록] 버디 안부 cron: "${BUDDY_CHECKIN_CRON}" (${TZ})`);
+}
+
+async function runBuddyCheckinJob() {
+  const groups = getBuddyGroups();
+  if (groups.length === 0) return;
+
+  const guild = await client.guilds.fetch(GUILD_ID);
+  const weekKey = isoWeekKey(new Date());
+  const weekNum = parseInt(weekKey.split("-W")[1], 10) || 0;
+  const message = BUDDY_CHECKIN_MESSAGES[weekNum % BUDDY_CHECKIN_MESSAGES.length];
+
+  for (const group of groups) {
+    const channel = await guild.channels.fetch(group.channelId).catch(() => null);
+    if (!channel) {
+      // 채널이 삭제된 경우, 다음부터는 대상에서 제외되도록 기록을 정리합니다.
+      removeBuddyGroupRecord(group.channelId);
+      continue;
+    }
+    await channel.send(`👋 ${message}`).catch((e) => console.error("[버디 안부 발송 실패]", e));
+  }
 }
 
 function markDmSent(userId, key) {
