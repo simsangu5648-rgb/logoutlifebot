@@ -1067,10 +1067,8 @@ client.on(Events.MessageReactionAdd, async (reaction, reactUser) => {
 
     const authorMember = await message.guild.members.fetch(message.author.id).catch(() => null);
     if (!authorMember) return;
-    const isHelperRole =
-      (ROLE_ID_GROW && authorMember.roles.cache.has(ROLE_ID_GROW)) ||
-      (ROLE_ID_MASTER && authorMember.roles.cache.has(ROLE_ID_MASTER));
-    if (!isHelperRole) return;
+    // 도움은 등급과 무관하게 누구나 주고받을 수 있으므로, 감사 반응 집계도 특정 역할로 제한하지 않습니다.
+    // (SOS 헬퍼 알림 대상은 별도 - notifyHelpers에서 그로우/마스터-크루/베테랑으로 그대로 유지됩니다.)
 
     const u = getUser(message.author.id);
     updateUser(message.author.id, {
