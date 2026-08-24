@@ -172,6 +172,64 @@ const REFLECTION_QUESTIONS = [
   "다음 주에 하나만 바꿀 수 있다면 뭘 바꾸고 싶나요?",
 ];
 
+// ── 이주의 챌린지 (그로우-크루/마스터-크루 전용) ──────────────
+// 50개를 순서대로 돌리고, 51주차부터는 다시 1번으로 돌아가 계속 반복됩니다.
+const CHALLENGE_CHANNEL_NAME = process.env.CHALLENGE_CHANNEL_NAME || "이주의-챌린지";
+const CHALLENGE_VERIFY_CHANNEL_NAME = process.env.CHALLENGE_VERIFY_CHANNEL_NAME || "챌린지-인증";
+
+const WEEKLY_CHALLENGES = [
+  "하루 스크린타임을 평소보다 30분 줄여보기",
+  "이번 주 3일 이상 #자연-인증에 인증 남기기",
+  "자기 전 30분은 폰을 침실 밖에 두고 자보기",
+  "SNS 앱 하나를 홈 화면에서 지워보기 (삭제 말고 숨기기만 해도 OK)",
+  "아침에 눈뜨자마자 폰 대신 물 한 잔부터 마시기, 3일 이상 시도",
+  "#충동-sos에 한 번도 안 써봤다면, 충동이 올 때 딱 한 번 글 남겨보기",
+  "잘 모르는 멤버 한 명에게 먼저 안부 인사 남기기",
+  "자기 전 알람을 다른 방에 두고 자보기 (폰 대신 물리 알람 사용)",
+  "급하지 않은 앱 알림을 5개 이상 꺼보기",
+  "하루 동안 SNS 없이 지내보기 (딱 하루만)",
+  "산책이나 스트레칭 10분, 3일 이상 해보기",
+  "이번 주 회고 질문(주간 팁 DM)에 답장 한 번 남겨보기",
+  "#자유수다에 오늘 내가 지킨 작은 습관 하나 자랑해보기",
+  "스크린타임 앱으로 이번 주 사용시간을 매일 확인해보기",
+  "폰 없이 밥 한 끼, 3번 이상 먹어보기",
+  "유튜브나 SNS 앱에 하루 사용 제한 시간을 걸어보기",
+  "잠들기 전 5분, 오늘 있었던 좋은 일 하나 적어보기 (3일 이상)",
+  "충동이 올 때 5분만 미뤄보기, 이번 주 한 번이라도 성공해보기",
+  "다른 멤버의 승급 소식이나 글에 리액션 남겨주기",
+  "하루는 폰을 흑백 화면으로 써보기 (설정에서 그레이스케일 켜기)",
+  "이번 주 3일 이상 #끄고-인증 남기기",
+  "심심할 때 손이 가는 대체 행동(책, 그림, 악기 등) 하나 정해서 이번 주 2번 시도해보기",
+  "자기 전 루틴에서 폰 보는 시간을 10분만 줄여보기, 3일 이상",
+  "오늘 하루는 SNS 피드를 아예 열지 않아보기",
+  "낮잠이나 짧은 휴식을 폰 없이 취해보기, 2번 이상",
+  "#자연-인증에 사진 대신 글로 오늘 하루 짧게 남겨보기",
+  "이번 주 한 번은 도움이 필요해 보이는 멤버에게 먼저 댓글 남겨보기",
+  "스크린타임 알림이 뜨면 그 순간 딱 5분만 다른 걸 해보기",
+  "주말 중 하루는 오전 시간대(기상~정오) 동안 폰 사용 최소화해보기",
+  "이번 주 스트릭을 하루도 안 끊기게 유지해보기",
+  "새로운 대체 취미(운동, 독서, 요리 등) 하나 이번 주에 딱 한 번 시도해보기",
+  "폰 잠금화면 배경을 \"지금 이걸 왜 켰지?\"로 바꿔서 습관을 인식해보기",
+  "이번 주 3일 이상 아침 기상 직후 1시간 동안 폰 안 보기",
+  "#충동-sos에서 다른 멤버 글에 응원 댓글 한 번 남겨보기",
+  "밖에 나가서 20분 이상 걷기, 이번 주 2번 이상",
+  "하루 동안 유튜브 추천 피드 대신 검색으로만 찾아보기",
+  "미디어 없이 혼자 있는 시간을 하루 15분씩 가져보기, 이번 주에",
+  "스크린타임 주간 리포트를 확인하고 지난주와 비교해보기",
+  "버디 그룹이 있다면 이번 주 안부 한 번 물어보기",
+  "자기 전 명상이나 심호흡 5분, 3일 이상 시도해보기",
+  "오늘 하루는 폰을 무음이나 방해금지 모드로 지내보기",
+  "이번 주 3일 이상 아무 인증이든 남겨서 스트릭 유지해보기",
+  "SNS 팔로우 목록을 정리해서 필요없는 계정 5개 언팔로우해보기",
+  "충동이 올라올 때 물 한 잔 마시고 60초만 버텨보기, 이번 주 한 번이라도",
+  "폰 없이 목욕이나 샤워 후 15분 정도 여유 시간 가져보기",
+  "이번 주 하루는 디지털 기기 없는 저녁 시간(2시간)을 만들어보기",
+  "#자기소개 채널에 오랜만에 근황 한 줄 남겨보기",
+  "스크린타임에서 가장 오래 쓴 앱 하나를 찾아 하루만 사용 안 해보기",
+  "이번 주 목표를 스스로 정하고 #자유수다에 선언해보기",
+  "이번 주 가장 뿌듯했던 순간을 스스로 떠올려보고 댓글로 남겨보기",
+];
+
 function todayKST() {
   // YYYY-MM-DD, TZ 기준
   return new Intl.DateTimeFormat("en-CA", { timeZone: TZ }).format(new Date());
@@ -236,6 +294,7 @@ client.once(Events.ClientReady, (c) => {
   scheduleStreakReminderJob();
   scheduleWeeklyHighlightJob();
   scheduleWeeklyTipJob();
+  scheduleWeeklyChallengeJob();
 });
 
 // ── 신규 멤버 자동 역할 부여 ───────────────────────────────
@@ -1218,6 +1277,39 @@ async function runWeeklyTipJob() {
       reflectionPromptSentAt: new Date().toISOString(),
     });
   }
+}
+
+// ── 이주의 챌린지: 매주 새 미션 발행 ─────────────────────────
+function scheduleWeeklyChallengeJob() {
+  const expr = process.env.CHALLENGE_CRON || "0 9 * * 1"; // 기본: 매주 월요일 오전 9시
+  cron.schedule(
+    expr,
+    () => runWeeklyChallengeJob().catch((e) => console.error("[주간 챌린지 오류]", e)),
+    { timezone: TZ }
+  );
+  console.log(`[예약 등록] 주간 챌린지 cron: "${expr}" (${TZ})`);
+}
+
+async function runWeeklyChallengeJob() {
+  const guild = await client.guilds.fetch(GUILD_ID);
+  const channel = guild.channels.cache.find(
+    (c) => c.name === CHALLENGE_CHANNEL_NAME && typeof c.send === "function"
+  );
+  if (!channel) return;
+
+  const weekKey = isoWeekKey(new Date());
+  const weekNum = parseInt(weekKey.split("-W")[1], 10) || 0;
+  // 50개를 순서대로 돌리고, 다 쓰면(51주차부터) 다시 처음으로 돌아가 계속 반복됩니다.
+  const challenge = WEEKLY_CHALLENGES[weekNum % WEEKLY_CHALLENGES.length];
+
+  const verifyChannel = guild.channels.cache.find(
+    (c) => c.name === CHALLENGE_VERIFY_CHANNEL_NAME && typeof c.send === "function"
+  );
+  const verifyMention = verifyChannel ? `<#${verifyChannel.id}>` : `#${CHALLENGE_VERIFY_CHANNEL_NAME}`;
+
+  await channel
+    .send(`🎯 이번 주 챌린지\n\n${challenge}\n\n완료했다면 ${verifyMention} 에서 인증해주세요!`)
+    .catch((e) => console.error("[주간 챌린지 발행 실패]", e));
 }
 
 function markDmSent(userId, key) {
