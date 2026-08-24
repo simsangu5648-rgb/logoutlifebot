@@ -1,4 +1,6 @@
 require("dotenv").config();
+const path = require("path");
+const fs = require("fs");
 const {
   Client,
   GatewayIntentBits,
@@ -6,6 +8,7 @@ const {
   Events,
   ChannelType,
   PermissionFlagsBits,
+  AttachmentBuilder,
 } = require("discord.js");
 const cron = require("node-cron");
 const express = require("express");
@@ -100,6 +103,10 @@ const EBOOK_PRICE = process.env.EBOOK_PRICE;
 const EBOOK_DOWNLOAD_URL = process.env.EBOOK_DOWNLOAD_URL || "";
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || "").replace(/\/+$/, "");
 const EBOOK_PURCHASE_COMMANDS = ["구매", "!구매", "전자책구매", "전자책 구매"];
+
+// ── 전자책 무료 미리보기 (파일 직접 첨부) ────────────────────
+const EBOOK_PREVIEW_COMMANDS = ["미리보기", "!미리보기", "전자책미리보기", "전자책 미리보기"];
+const EBOOK_PREVIEW_PATH = path.join(__dirname, "assets", "ebook_preview.pdf");
 
 // ── 즉시반응 시스템 (#충동-sos) ─────────────────────────────────
 const SOS_CHANNEL_NAME = process.env.SOS_CHANNEL_NAME || "충동-sos";
@@ -257,6 +264,8 @@ client.on(Events.MessageCreate, async (message) => {
         await message.reply("좋아요! 승급하시면 다시 공개 채널에서 축하 메시지를 남길게요 🎉");
       } else if (EBOOK_PURCHASE_COMMANDS.includes(content)) {
         await handleEbookPurchaseRequest(message);
+      } else if (EBOOK_PREVIEW_COMMANDS.includes(content)) {
+        await handleEbookPreviewRequest(message);
       } else if (content === "회고" || content === "!회고") {
         await handleReflectionHistoryRequest(message);
       } else {
@@ -539,6 +548,24 @@ async function handleEbookPurchaseRequest(message) {
     await message.reply("결제 링크 생성 중 오류가 발생했어요. 잠시 후 다시 시도해주세요.");
   }
 }
+async function handleEbookPreviewRequest(message) {
+  try {
+    if (!fs.existsSync(EBOOK_PREVIEW_PATH)) {
+      await message.reply("미리보기 파일을 찾을 수 없어요. 운영자에게 문의해주세요.");
+      console.error("[전자책 미리보기 오류] 파일 없음:", EBOOK_PREVIEW_PATH);
+      return;
+    }
+    const attachment = new AttachmentBuilder(EBOOK_PREVIEW_PATH, { name: "로그아웃라이프_REBOOT_미리보기.pdf" });
+    await message.reply({
+      content: `📖 **${EBOOK_NAME}** 무료 미리보기예요! (프롤로그 + 1장 전체 수록)\n전체 내용이 마음에 드시면 "${EBOOK_PURCHASE_COMMANDS[0]}"라고 보내주세요 🙂`,
+      files: [attachment],
+    });
+  } catch (e) {
+    console.error("[전자책 미리보기 전송 오류]", e);
+    await message.reply("미리보기 전송 중 오류가 발생했어요. 잠시 후 다시 시도해주세요.");
+  }
+}
+
 
 async function createPayAppPaymentLink(discordUserId) {
   const params = new URLSearchParams({
