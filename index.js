@@ -699,6 +699,13 @@ app.use(express.json());
 
 app.get("/", (req, res) => res.status(200).send("OK"));
 
+// 전자책 소개 랜딩페이지를 직접 서빙합니다 (외부 사이트 의존 없이,
+// 로그인 없이 누구나 바로 볼 수 있어요). ?uid=디스코드유저ID를 붙이면
+// 페이지 내 구매 버튼이 본인 전용 결제 링크로 자동 연결됩니다.
+app.get("/landing", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "landing.html"));
+});
+
 app.post("/payapp/feedback", async (req, res) => {
   // PayApp은 이 엔드포인트가 정확히 'SUCCESS' 응답을 주지 않으면 재시도하므로,
   // 처리 중 어떤 오류가 나도 일단 200 SUCCESS는 보내고 로그로만 남깁니다.
