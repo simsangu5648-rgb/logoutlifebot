@@ -1,6 +1,7 @@
 require("dotenv").config();
 const path = require("path");
 const fs = require("fs");
+const crypto = require("crypto");
 const {
   Client,
   GatewayIntentBits,
@@ -1067,10 +1068,27 @@ async function createPayAppPaymentLink(discordUserId) {
   return decodeURIComponent(parsed.get("payurl") || "");
 }
 
+// ── 대용량 워터마크 PDF 다운로드 링크 (Discord DM 첨부 용량 제한 우회) ──────
+// Discord DM 첨부파일에는 용량 제한이 있어서, 원본 PDF에 이미지가 많으면 워터마크를
+// 입힌 뒤에도 그 제한(DiscordAPIError 40005 "Request entity too large")을 넘을 수
+// 있습니다. 그런 경우 파일을 직접 첨부하는 대신, 이 서버가 잠깐 호스팅해주는
+// 구매자 전용(추측 불가능한 토큰) 다운로드 링크를 DM으로 보내드립니다.
+const DISCORD_ATTACHMENT_SAFE_LIMIT = 7 * 1024 * 1024; // 7MB - Discord DM 첨부 제한보다 여유 있게 안전선으로 잡음
+const downloadTokens = new Map(); // token -> { buffer, filename, createdAt }
+const DOWNLOAD_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7일 후 자동 만료
+setInterval(() => {
+  const now = Date.now();
+  for (const [token, entry] of downloadTokens.entries()) {
+    if (now - entry.createdAt > DOWNLOAD_TOKEN_TTL_MS) downloadTokens.delete(token);
+  }
+}, 60 * 60 * 1000).unref();
+
 // ── 구매자에게 전자책+워크북 전달 (워터마크 PDF 우선, 없으면 다운로드 링크로 대체) ──
 // 판매 상품은 "전자책 + 30일 워크북" 두 파일 번들이라, 원본이 업로드된 파일들을 모두
 // 워터마크 처리해서 한 DM에 같이 첨부해 보냅니다.
 // (링크와 달리 복사해서 다른 사람에게 전달해도, 유출 시 워터마크로 누구 파일인지 바로 추적돼요.)
+// 단, 워터마크 입힌 파일이 DISCORD_ATTACHMENT_SAFE_LIMIT보다 크면 Discord가 첨부를
+// 거부하므로(40005 오류), 그런 파일은 대신 위 다운로드 링크로 보내드립니다.
 // 아직 운영진이 원본 파일을 업로드하지 않은 항목이 있으면, 그 항목만 안내 문구로 대신합니다.
 const PURCHASED_ITEMS = [
   { name: EBOOK_NAME, masterPath: EBOOK_MASTER_PATH },
@@ -1080,6 +1098,7 @@ const PURCHASED_ITEMS = [
 async function sendEbookToBuyer(member) {
   const buyerLabel = member.user.tag || member.user.username;
   const attachments = [];
+  const downloadLinks = [];
   const notReadyItems = [];
 
   for (const item of PURCHASED_ITEMS) {
@@ -1089,22 +1108,34 @@ async function sendEbookToBuyer(member) {
     }
     try {
       const watermarked = await generateWatermarkedPdf(item.masterPath, buyerLabel);
-      attachments.push(new AttachmentBuilder(watermarked, { name: `${item.name}.pdf` }));
+      if (watermarked.length > DISCORD_ATTACHMENT_SAFE_LIMIT && PUBLIC_BASE_URL) {
+        // 파일이 너무 커서 DM에 직접 첨부하면 Discord가 거부하므로, 다운로드 링크로 대체합니다.
+        const token = crypto.randomUUID();
+        downloadTokens.set(token, { buffer: watermarked, filename: `${item.name}.pdf`, createdAt: Date.now() });
+        downloadLinks.push({ name: item.name, url: `${PUBLIC_BASE_URL}/dl/${token}` });
+      } else {
+        attachments.push(new AttachmentBuilder(watermarked, { name: `${item.name}.pdf` }));
+      }
     } catch (e) {
       console.error(`[${item.name} 워터마크 파일 생성 오류]`, e);
       notReadyItems.push(item.name);
     }
   }
 
-  if (attachments.length) {
+  if (attachments.length || downloadLinks.length) {
+    const deliveredNames = [...attachments.map((a) => a.name.replace(/\.pdf$/, "")), ...downloadLinks.map((l) => l.name)];
+    const linksNote = downloadLinks.length
+      ? "\n\n" + downloadLinks.map((l) => `📥 ${l.name} 다운로드: ${l.url}\n(용량이 커서 파일 대신 다운로드 링크로 보내드려요. 본인만 사용해주세요.)`).join("\n")
+      : "";
     const notReadyNote = notReadyItems.length
       ? `\n\n※ ${notReadyItems.join(", ")}는 준비되는 대로 곧 별도로 보내드릴게요.`
       : "";
     await member.send({
       content:
-        `📘 구매하신 파일이에요! (${attachments.map((a) => a.name.replace(/\.pdf$/, "")).join(" + ")})\n` +
+        `📘 구매하신 파일이에요! (${deliveredNames.join(" + ")})\n` +
         `이 파일들에는 **${buyerLabel}** 님 전용 워터마크가 삽입되어 있어요. 개인 소장용으로만 사용해주시고, ` +
         `무단 배포·재판매·공유는 삼가주세요 — 유출 시 구매자 추적이 가능해요 🙏` +
+        linksNote +
         notReadyNote,
       files: attachments,
     });
@@ -1181,6 +1212,20 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
 app.get("/", (req, res) => res.status(200).send("OK"));
+
+// 대용량 워터마크 PDF 다운로드 링크 (구매자 전용, 추측 불가능한 토큰 기반).
+// sendEbookToBuyer에서 파일이 Discord 첨부 용량 제한을 넘을 때만 이 링크를 만들어 보냅니다.
+app.get("/dl/:token", (req, res) => {
+  const entry = downloadTokens.get(req.params.token);
+  if (!entry) {
+    return res
+      .status(404)
+      .send("링크가 만료되었거나 존재하지 않는 파일이에요. 디스코드로 돌아가서 봇에게 문의해주세요.");
+  }
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(entry.filename)}"`);
+  res.send(entry.buffer);
+});
 
 // 전자책 소개 랜딩페이지를 직접 서빙합니다 (외부 사이트 의존 없이,
 // 로그인 없이 누구나 바로 볼 수 있어요). ?uid=디스코드유저ID를 붙이면
