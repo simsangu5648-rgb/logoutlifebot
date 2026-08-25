@@ -125,6 +125,7 @@ const EBOOK_MASTER_PATH = fs.existsSync(EBOOK_DATA_DIR)
   ? path.join(EBOOK_DATA_DIR, "ebook_master.pdf")
   : path.join(__dirname, "ebook_master.local.pdf"); // 볼륨이 없는 로컬 개발 환경용
 const EBOOK_UPLOAD_COMMAND = "!전자책원본업로드";
+const EBOOK_RESET_COMMAND = "!구매초기화";
 
 // 워터마크 텍스트(한글 포함)를 이미지로 그려서 PDF에 얹기 위한 한글 폰트.
 // (pdf-lib에 직접 한글 폰트를 임베드하면 일부 글자가 깨지는 문제가 있어,
@@ -382,6 +383,8 @@ client.on(Events.MessageCreate, async (message) => {
         await handleEbookPreviewRequest(message);
       } else if (content === EBOOK_UPLOAD_COMMAND) {
         await handleEbookMasterUpload(message);
+      } else if (content === EBOOK_RESET_COMMAND) {
+        await handleEbookPurchaseReset(message);
       } else if (content === "회고" || content === "!회고") {
         await handleReflectionHistoryRequest(message);
       } else if (content === "패턴" || content === "!패턴") {
@@ -913,6 +916,44 @@ async function handleEbookMasterUpload(message) {
   } catch (e) {
     console.error("[전자책 원본 업로드 오류]", e);
     await message.reply("전자책 원본 파일 저장에 실패했어요. 잠시 후 다시 시도해주세요.");
+  }
+}
+
+// "!구매초기화" — 서버 운영자 전용. 테스트/환불 등의 사유로 본인 계정의
+// 전자책 구매 기록과 그로우-크루/마스터-크루 역할을 초기화해서, 처음 구매하는
+// 것처럼 다시 결제~전자책 발급 흐름을 테스트할 수 있게 해줍니다.
+async function handleEbookPurchaseReset(message) {
+  try {
+    const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
+    if (!guild || guild.ownerId !== message.author.id) {
+      await message.reply("이 명령어는 서버 운영자만 사용할 수 있어요.");
+      return;
+    }
+    const member = await guild.members.fetch(message.author.id).catch(() => null);
+    if (!member) {
+      await message.reply("서버 멤버 정보를 찾을 수 없어요. 서버에 가입되어 있는지 확인해주세요.");
+      return;
+    }
+
+    updateUser(message.author.id, { ebookPurchased: false, ebookPurchasedAt: null });
+
+    const removedRoles = [];
+    if (member.roles.cache.has(ROLE_ID_MASTER)) {
+      await member.roles.remove(ROLE_ID_MASTER).catch((e) => console.error("[역할제거 실패] 마스터-크루", e));
+      removedRoles.push("마스터-크루");
+    }
+    if (member.roles.cache.has(ROLE_ID_GROW)) {
+      await member.roles.remove(ROLE_ID_GROW).catch((e) => console.error("[역할제거 실패] 그로우-크루", e));
+      removedRoles.push("그로우-크루");
+    }
+
+    await message.reply(
+      `✅ 구매 기록을 초기화했어요.${removedRoles.length ? ` (${removedRoles.join(", ")} 역할 제거됨)` : " (제거할 역할은 없었어요)"}\n` +
+        `이제 "구매"라고 다시 보내시면 처음 구매하는 것처럼 결제 → 승급 → 전자책 발급 흐름을 처음부터 테스트하실 수 있어요.`
+    );
+  } catch (e) {
+    console.error("[구매 초기화 오류]", e);
+    await message.reply("초기화 중 오류가 발생했어요. 잠시 후 다시 시도해주세요.");
   }
 }
 
