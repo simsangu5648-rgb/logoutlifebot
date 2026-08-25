@@ -988,7 +988,7 @@ async function generateWatermarkedEbook(buyerLabel) {
       ctx.fillStyle = "rgba(120,120,120,0.75)";
       ctx.textAlign = "left";
       ctx.textBaseline = "alphabetic";
-      ctx.fillText(footerStamp, 20, height - 14);
+      ctx.fillText("LogoutLife", 20, height - 14);
 
       // 중앙 대각선 워터마크
       ctx.save();
@@ -997,7 +997,7 @@ async function generateWatermarkedEbook(buyerLabel) {
       ctx.font = `bold 30px ${EBOOK_WATERMARK_FONT_FAMILY}`;
       ctx.fillStyle = "rgba(150,150,150,0.30)";
       ctx.textAlign = "center";
-      ctx.fillText(buyerLabel, 0, 0);
+      ctx.fillText("LogoutLife", 0, 0);
       ctx.restore();
 
       const pngBytes = canvas.toBuffer("image/png");
