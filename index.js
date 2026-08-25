@@ -1090,9 +1090,11 @@ setInterval(() => {
 // 단, 워터마크 입힌 파일이 DISCORD_ATTACHMENT_SAFE_LIMIT보다 크면 Discord가 첨부를
 // 거부하므로(40005 오류), 그런 파일은 대신 위 다운로드 링크로 보내드립니다.
 // 아직 운영진이 원본 파일을 업로드하지 않은 항목이 있으면, 그 항목만 안내 문구로 대신합니다.
+// 워크북은 용량이 커서(원본에 이미지/워크시트가 많음) 매번 크기 검사를 거치지 않고
+// 항상 다운로드 링크로만 보내도록 alwaysLink로 고정했습니다.
 const PURCHASED_ITEMS = [
   { name: EBOOK_NAME, masterPath: EBOOK_MASTER_PATH },
-  { name: WORKBOOK_NAME, masterPath: WORKBOOK_MASTER_PATH },
+  { name: WORKBOOK_NAME, masterPath: WORKBOOK_MASTER_PATH, alwaysLink: true },
 ];
 
 async function sendEbookToBuyer(member) {
@@ -1108,7 +1110,7 @@ async function sendEbookToBuyer(member) {
     }
     try {
       const watermarked = await generateWatermarkedPdf(item.masterPath, buyerLabel);
-      if (watermarked.length > DISCORD_ATTACHMENT_SAFE_LIMIT && PUBLIC_BASE_URL) {
+      if ((item.alwaysLink || watermarked.length > DISCORD_ATTACHMENT_SAFE_LIMIT) && PUBLIC_BASE_URL) {
         // 파일이 너무 커서 DM에 직접 첨부하면 Discord가 거부하므로, 다운로드 링크로 대체합니다.
         const token = crypto.randomUUID();
         downloadTokens.set(token, { buffer: watermarked, filename: `${item.name}.pdf`, createdAt: Date.now() });
