@@ -138,9 +138,6 @@ const STREAK_COMMAND = process.env.STREAK_COMMAND || "!기록";
 // 한 달에 이 횟수만큼은, 하루를 걸러도 연속기록(스트릭)이 끊기지 않습니다.
 const STREAK_FREEZE_PER_MONTH = parseInt(process.env.STREAK_FREEZE_PER_MONTH || "1", 10);
 
-// ── 승급 알림 & 배지 시스템 ────────────────────────────────
-const ANNOUNCE_CHANNEL_NAME = process.env.ANNOUNCE_CHANNEL_NAME || "자유수다";
-
 // ── 멘토 하이라이트 시스템 ─────────────────────────────────
 const HELPER_THANKS_EMOJI = process.env.HELPER_THANKS_EMOJI || "🙏";
 const HONOR_CHANNEL_NAME = process.env.HONOR_CHANNEL_NAME || "명예의-전당";
@@ -1044,7 +1041,7 @@ async function announcePromotion(guild, member, roleLabel) {
     const u = getUser(member.id);
     if (u.publicAnnounceOptOut) return;
     const channel = guild.channels.cache.find(
-      (c) => c.name === ANNOUNCE_CHANNEL_NAME && typeof c.send === "function"
+      (c) => c.name === HONOR_CHANNEL_NAME && typeof c.send === "function"
     );
     if (!channel) return;
     await channel.send(`🎉 **${member.displayName}**님이 ${roleLabel}로 승급했어요! 축하해주세요 👏`);
