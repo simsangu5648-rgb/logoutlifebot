@@ -127,6 +127,15 @@ const EBOOK_MASTER_PATH = fs.existsSync(EBOOK_DATA_DIR)
 const EBOOK_UPLOAD_COMMAND = "!전자책원본업로드";
 const EBOOK_RESET_COMMAND = "!구매초기화";
 
+// 판매 상품은 전자책 + 30일 워크북 "두 파일" 번들이라(랜딩페이지에도 "전자책과 워크북
+// 두 파일 모두" 라고 명시되어 있음), 워크북도 전자책과 완전히 동일한 방식(원본 별도 업로드 +
+// 구매자별 워터마크 + DM 첨부 발송)으로 처리합니다.
+const WORKBOOK_NAME = process.env.WORKBOOK_NAME || "30일 리부트 챌린지 워크북";
+const WORKBOOK_MASTER_PATH = fs.existsSync(EBOOK_DATA_DIR)
+  ? path.join(EBOOK_DATA_DIR, "workbook_master.pdf")
+  : path.join(__dirname, "workbook_master.local.pdf");
+const WORKBOOK_UPLOAD_COMMAND = "!워크북원본업로드";
+
 // 워터마크 텍스트(한글 포함)를 이미지로 그려서 PDF에 얹기 위한 한글 폰트.
 // (pdf-lib에 직접 한글 폰트를 임베드하면 일부 글자가 깨지는 문제가 있어,
 // @napi-rs/canvas로 텍스트를 이미지로 렌더링한 뒤 그 이미지를 페이지에 얹는 방식을 씁니다.)
@@ -383,6 +392,8 @@ client.on(Events.MessageCreate, async (message) => {
         await handleEbookPreviewRequest(message);
       } else if (content === EBOOK_UPLOAD_COMMAND) {
         await handleEbookMasterUpload(message);
+      } else if (content === WORKBOOK_UPLOAD_COMMAND) {
+        await handleWorkbookMasterUpload(message);
       } else if (content === EBOOK_RESET_COMMAND) {
         await handleEbookPurchaseReset(message);
       } else if (content === "회고" || content === "!회고") {
@@ -885,12 +896,12 @@ async function handleEbookPreviewRequest(message) {
   }
 }
 
-// ── 운영진 전용: 전자책 원본 PDF 업로드/교체 (DM) ─────────────────
-// 사용법: 서버 운영자(길드 소유자)가 봇 DM에 "!전자책원본업로드" 메시지와 함께
-// PDF 파일을 첨부해서 보내면, 그 파일을 Railway 영구 볼륨에 저장합니다.
-// 이 파일은 git 저장소에는 절대 올라가지 않고, 결제 확인 시마다 구매자 워터마크를
+// ── 운영진 전용: 전자책/워크북 원본 PDF 업로드/교체 (DM) ─────────────────
+// 사용법: 서버 운영자(길드 소유자)가 봇 DM에 "!전자책원본업로드" 또는 "!워크북원본업로드"
+// 메시지와 함께 PDF 파일을 첨부해서 보내면, 그 파일을 Railway 영구 볼륨에 저장합니다.
+// 이 파일들은 git 저장소에는 절대 올라가지 않고, 결제 확인 시마다 구매자 워터마크를
 // 새로 입혀서 DM으로 발송하는 데 쓰입니다.
-async function handleEbookMasterUpload(message) {
+async function handleMasterUpload(message, { masterPath, uploadCommand, label }) {
   try {
     const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
     if (!guild || guild.ownerId !== message.author.id) {
@@ -901,22 +912,38 @@ async function handleEbookMasterUpload(message) {
       (a) => (a.contentType || "").includes("pdf") || (a.name || "").toLowerCase().endsWith(".pdf")
     );
     if (!pdfAttachment) {
-      await message.reply(`전자책 원본 PDF 파일을 이 메시지에 첨부해서 "${EBOOK_UPLOAD_COMMAND}"와 함께 다시 보내주세요.`);
+      await message.reply(`${label} 원본 PDF 파일을 이 메시지에 첨부해서 "${uploadCommand}"와 함께 다시 보내주세요.`);
       return;
     }
     const res = await fetch(pdfAttachment.url);
     if (!res.ok) throw new Error(`파일 다운로드 실패 (status ${res.status})`);
     const buf = Buffer.from(await res.arrayBuffer());
-    fs.mkdirSync(path.dirname(EBOOK_MASTER_PATH), { recursive: true });
-    fs.writeFileSync(EBOOK_MASTER_PATH, buf);
+    fs.mkdirSync(path.dirname(masterPath), { recursive: true });
+    fs.writeFileSync(masterPath, buf);
     await message.reply(
-      `✅ 전자책 원본 파일을 저장했어요 (${(buf.length / 1024 / 1024).toFixed(2)}MB). ` +
+      `✅ ${label} 원본 파일을 저장했어요 (${(buf.length / 1024 / 1024).toFixed(2)}MB). ` +
         `앞으로 결제가 확인되면 이 파일에 구매자 워터마크를 자동으로 입혀서 DM으로 보내드려요.`
     );
   } catch (e) {
-    console.error("[전자책 원본 업로드 오류]", e);
-    await message.reply("전자책 원본 파일 저장에 실패했어요. 잠시 후 다시 시도해주세요.");
+    console.error(`[${label} 원본 업로드 오류]`, e);
+    await message.reply(`${label} 원본 파일 저장에 실패했어요. 잠시 후 다시 시도해주세요.`);
   }
+}
+
+async function handleEbookMasterUpload(message) {
+  return handleMasterUpload(message, {
+    masterPath: EBOOK_MASTER_PATH,
+    uploadCommand: EBOOK_UPLOAD_COMMAND,
+    label: "전자책",
+  });
+}
+
+async function handleWorkbookMasterUpload(message) {
+  return handleMasterUpload(message, {
+    masterPath: WORKBOOK_MASTER_PATH,
+    uploadCommand: WORKBOOK_UPLOAD_COMMAND,
+    label: "워크북",
+  });
 }
 
 // "!구매초기화" — 서버 운영자 전용. 테스트/환불 등의 사유로 본인 계정의
@@ -957,16 +984,20 @@ async function handleEbookPurchaseReset(message) {
   }
 }
 
-// ── 구매자 전용 워터마크가 삽입된 전자책 PDF 생성 ─────────────────
-// EBOOK_MASTER_PATH의 원본을 읽어, 모든 페이지 하단에 작은 텍스트로,
-// 중앙에는 큼직하고 옅은 대각선 텍스트로 구매자 식별 정보를 새겨넣습니다.
-// 파일이 유출되더라도 어느 구매자에게서 나갔는지 바로 알아볼 수 있게 하기 위함입니다.
-async function generateWatermarkedEbook(buyerLabel) {
+// ── 구매자 전용 워터마크가 삽입된 PDF 생성 (전자책/워크북 공용) ───────
+// masterPath의 원본을 읽어, 모든 페이지 하단에 작은 텍스트로("LOGOUTLIFE" 브랜드 +
+// 구매자 식별 정보), 중앙에는 큼직하고 옅은 대각선 텍스트로 "LOGOUTLIFE" 브랜드 워터마크를
+// 새겨넣습니다. 파일이 유출되더라도 어느 구매자에게서 나갔는지, 그리고 어느 브랜드의
+// 콘텐츠인지 바로 알아볼 수 있게 하기 위함입니다.
+const WATERMARK_BRAND = process.env.WATERMARK_BRAND || "LOGOUTLIFE";
+
+async function generateWatermarkedPdf(masterPath, buyerLabel) {
   const { PDFDocument } = require("pdf-lib");
   const { createCanvas } = require("@napi-rs/canvas");
-  const masterBytes = fs.readFileSync(EBOOK_MASTER_PATH);
+  const masterBytes = fs.readFileSync(masterPath);
   const pdfDoc = await PDFDocument.load(masterBytes);
-  const footerStamp = `${buyerLabel} 전용 구매본 · 무단 배포·재판매 금지 · ${todayKST()}`;
+  const footerStamp = `${WATERMARK_BRAND} · ${buyerLabel} 전용 구매본 · 무단 배포·재판매 금지 · ${todayKST()}`;
+  const centerStamp = `${WATERMARK_BRAND} · ${buyerLabel}`;
 
   // 페이지 크기(가로x세로)별로 워터마크 오버레이 이미지를 한 번만 만들어 재사용합니다.
   // (같은 이미지를 페이지마다 새로 embed하면 페이지 수만큼 파일 용량이 불어나기 때문에,
@@ -988,7 +1019,7 @@ async function generateWatermarkedEbook(buyerLabel) {
       ctx.fillStyle = "rgba(120,120,120,0.75)";
       ctx.textAlign = "left";
       ctx.textBaseline = "alphabetic";
-      ctx.fillText("LogoutLife", 20, height - 14);
+      ctx.fillText(footerStamp, 20, height - 14);
 
       // 중앙 대각선 워터마크
       ctx.save();
@@ -997,7 +1028,7 @@ async function generateWatermarkedEbook(buyerLabel) {
       ctx.font = `bold 30px ${EBOOK_WATERMARK_FONT_FAMILY}`;
       ctx.fillStyle = "rgba(150,150,150,0.30)";
       ctx.textAlign = "center";
-      ctx.fillText("LogoutLife", 0, 0);
+      ctx.fillText(centerStamp, 0, 0);
       ctx.restore();
 
       const pngBytes = canvas.toBuffer("image/png");
@@ -1036,29 +1067,51 @@ async function createPayAppPaymentLink(discordUserId) {
   return decodeURIComponent(parsed.get("payurl") || "");
 }
 
-// ── 구매자에게 전자책 전달 (워터마크 PDF 우선, 없으면 다운로드 링크로 대체) ──
-// 워터마크가 삽입된 개인화 PDF를 만들 수 있으면 그걸 DM에 직접 첨부해서 보냅니다.
+// ── 구매자에게 전자책+워크북 전달 (워터마크 PDF 우선, 없으면 다운로드 링크로 대체) ──
+// 판매 상품은 "전자책 + 30일 워크북" 두 파일 번들이라, 원본이 업로드된 파일들을 모두
+// 워터마크 처리해서 한 DM에 같이 첨부해 보냅니다.
 // (링크와 달리 복사해서 다른 사람에게 전달해도, 유출 시 워터마크로 누구 파일인지 바로 추적돼요.)
-// 아직 운영진이 원본 파일을 업로드하지 않았다면 기존 EBOOK_DOWNLOAD_URL 링크로 대체합니다.
+// 아직 운영진이 원본 파일을 업로드하지 않은 항목이 있으면, 그 항목만 안내 문구로 대신합니다.
+const PURCHASED_ITEMS = [
+  { name: EBOOK_NAME, masterPath: EBOOK_MASTER_PATH },
+  { name: WORKBOOK_NAME, masterPath: WORKBOOK_MASTER_PATH },
+];
+
 async function sendEbookToBuyer(member) {
-  if (fs.existsSync(EBOOK_MASTER_PATH)) {
+  const buyerLabel = member.user.tag || member.user.username;
+  const attachments = [];
+  const notReadyItems = [];
+
+  for (const item of PURCHASED_ITEMS) {
+    if (!fs.existsSync(item.masterPath)) {
+      notReadyItems.push(item.name);
+      continue;
+    }
     try {
-      const buyerLabel = member.user.tag || member.user.username;
-      const watermarked = await generateWatermarkedEbook(buyerLabel);
-      const attachment = new AttachmentBuilder(watermarked, { name: `${EBOOK_NAME}.pdf` });
-      await member.send({
-        content:
-          `📘 **${EBOOK_NAME}** 파일이에요!\n` +
-          `이 파일에는 **${buyerLabel}** 님 전용 워터마크가 삽입되어 있어요. 개인 소장용으로만 사용해주시고, ` +
-          `무단 배포·재판매·공유는 삼가주세요 — 유출 시 구매자 추적이 가능해요 🙏`,
-        files: [attachment],
-      });
-      return;
+      const watermarked = await generateWatermarkedPdf(item.masterPath, buyerLabel);
+      attachments.push(new AttachmentBuilder(watermarked, { name: `${item.name}.pdf` }));
     } catch (e) {
-      console.error("[전자책 워터마크 파일 전송 오류]", e);
-      // 아래로 이어져서 다운로드 링크(설정돼 있다면)로 대체 발송을 시도합니다.
+      console.error(`[${item.name} 워터마크 파일 생성 오류]`, e);
+      notReadyItems.push(item.name);
     }
   }
+
+  if (attachments.length) {
+    const notReadyNote = notReadyItems.length
+      ? `\n\n※ ${notReadyItems.join(", ")}는 준비되는 대로 곧 별도로 보내드릴게요.`
+      : "";
+    await member.send({
+      content:
+        `📘 구매하신 파일이에요! (${attachments.map((a) => a.name.replace(/\.pdf$/, "")).join(" + ")})\n` +
+        `이 파일들에는 **${buyerLabel}** 님 전용 워터마크가 삽입되어 있어요. 개인 소장용으로만 사용해주시고, ` +
+        `무단 배포·재판매·공유는 삼가주세요 — 유출 시 구매자 추적이 가능해요 🙏` +
+        notReadyNote,
+      files: attachments,
+    });
+    return;
+  }
+
+  // 원본이 하나도 준비되지 않았을 때만 기존 다운로드 링크(설정돼 있다면)로 대체합니다.
   if (EBOOK_DOWNLOAD_URL) {
     await safeDM(
       member,
@@ -1066,8 +1119,8 @@ async function sendEbookToBuyer(member) {
         `※ 이 링크는 본인만 사용해주시고, 다른 사람과 공유하지 말아주세요.`
     );
   } else {
-    console.warn(`[전자책 전달 실패] 원본 파일도, EBOOK_DOWNLOAD_URL도 설정되어 있지 않아 ${member.user.tag}에게 전자책을 전달하지 못했습니다.`);
-    await safeDM(member, `전자책 파일은 확인 후 곧 별도로 보내드릴게요. 잠시만 기다려주세요!`);
+    console.warn(`[전자책/워크북 전달 실패] 원본 파일도, EBOOK_DOWNLOAD_URL도 설정되어 있지 않아 ${member.user.tag}에게 파일을 전달하지 못했습니다.`);
+    await safeDM(member, `구매하신 파일은 확인 후 곧 별도로 보내드릴게요. 잠시만 기다려주세요!`);
   }
 }
 
