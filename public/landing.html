@@ -495,7 +495,7 @@ h2.h-serif{ font-family:"Noto Serif CJK KR",serif; font-weight:900; font-size:cl
         <li>LOGOUTLIFE 디스코드 커뮤니티 초대</li>
       </ul>
       <a href="https://discord.gg/9mDt3SmJUG" target="_blank" rel="noopener" class="pc-cta">지금 리부트 시작하기 →</a>
-      <div class="pc-note" id="pcNote">버튼을 누르면 LOGOUTLIFE 디스코드로 이동해요. 서버 안에서 봇에게 DM으로 "구매"라고 보내면 결제가 진행됩니다.<br><br>이 책은 개인의 경험과 참고 이론을 담은 자기계발 워크북이며, 검증된 임상 치료를 대체하지 않습니다.</div>
+      <div class="pc-note" id="pcNote">버튼을 누르면 LOGOUTLIFE 디스코드로 이동해요. 서버 안에서 봇에게 DM으로 "구매"라고 보내면 결제가 진행됩니다.<br><br>이 책은 개인의 경험과 참고 이론을 담은 자기계발 워크북이며, 검증된 임상 치료를 대체하지 않습니다.<br><br>구매자 전용 공간에서는 절제·재발 기록 등 건강·성생활 관련 민감정보를 다룰 수 있어요. 결제를 진행하시면 이 기록이 회복 목적으로만 쓰이고 동의 없이 공개되지 않는다는 점에 동의하신 것으로 안내드려요.</div>
     </div>
     <div class="trust-strip reveal">
       <span>Brunch 독립출판</span>
@@ -661,7 +661,7 @@ document.querySelectorAll('.faq-item').forEach(item=>{
     document.querySelectorAll('a.pc-cta').forEach(function(a){ a.href = payHref; });
     var note = document.getElementById('pcNote');
     if (note) {
-      note.innerHTML = '버튼을 누르면 본인 전용 결제 페이지로 바로 연결돼요.<br><br>이 책은 개인의 경험과 참고 이론을 담은 자기계발 워크북이며, 검증된 임상 치료를 대체하지 않습니다.';
+      note.innerHTML = '버튼을 누르면 본인 전용 결제 페이지로 바로 연결돼요.<br><br>이 책은 개인의 경험과 참고 이론을 담은 자기계발 워크북이며, 검증된 임상 치료를 대체하지 않습니다.<br><br>구매자 전용 공간에서는 절제·재발 기록 등 건강·성생활 관련 민감정보를 다룰 수 있어요. 결제를 진행하시면 이 기록이 회복 목적으로만 쓰이고 동의 없이 공개되지 않는다는 점에 동의하신 것으로 안내드려요.';
     }
   } catch (e) { /* uid 파싱 실패 시 기본 디스코드 링크 그대로 사용 */ }
 })();
