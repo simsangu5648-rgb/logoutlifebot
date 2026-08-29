@@ -59,37 +59,10 @@ const TEXT_OK_CHANNELS = (process.env.TEXT_OK_CHANNEL_NAMES || "충동분산-인
 const T_MASTER = parseInt(THRESHOLD_MASTER || "30", 10);
 const TZ = TIMEZONE || "Asia/Seoul";
 
-// ── 일반멤버(무료) 4단계 등급 시스템 ──────────────────────────
-// 전자책을 구매하기 전까지의 "일반사람들"은 누적 인증 횟수만으로 4단계를 올라갑니다.
-// 리부트-크루/마스터-크루로 승급하면 이 배지 역할은 자동으로 회수됩니다.
-const FREE_LEVELS = [
-  {
-    key: "lv4",
-    label: process.env.FREE_LV4_LABEL || "베테랑",
-    threshold: parseInt(process.env.FREE_LV4_THRESHOLD || "90", 10),
-    roleId: process.env.ROLE_ID_FREE_LV4,
-  },
-  {
-    key: "lv3",
-    label: process.env.FREE_LV3_LABEL || "실천가",
-    threshold: parseInt(process.env.FREE_LV3_THRESHOLD || "30", 10),
-    roleId: process.env.ROLE_ID_FREE_LV3,
-  },
-  {
-    key: "lv2",
-    label: process.env.FREE_LV2_LABEL || "습관러",
-    threshold: parseInt(process.env.FREE_LV2_THRESHOLD || "7", 10),
-    roleId: process.env.ROLE_ID_FREE_LV2,
-  },
-  {
-    key: "lv1",
-    label: process.env.FREE_LV1_LABEL || "새싹",
-    threshold: parseInt(process.env.FREE_LV1_THRESHOLD || "1", 10),
-    roleId: process.env.ROLE_ID_FREE_LV1,
-  },
-]; // threshold 내림차순 - 배열을 순서대로 훑으며 가장 먼저 만족하는 단계가 "현재 단계"
-
-const FREE_LEVEL_ROLE_IDS = FREE_LEVELS.map((lv) => lv.roleId).filter(Boolean);
+// (일반멤버 4단계 등급 배지 시스템 - 탈출시작/저항력/실천가/베테랑 - 은
+// 채널 구조를 오늘의-기록/힘든날-나눔으로 통합하면서 카운팅 대상 채널이 모두
+// 사라져 더 이상 아무도 새로 승급할 수 없는 상태였고, 커뮤니티 초간소화 개편에
+// 맞춰 역할·코드 모두 삭제했습니다.)
 
 // ── 전자책 결제(PayApp) 연동 ───────────────────────────────
 const PAYAPP_USERID = process.env.PAYAPP_USERID;
@@ -178,9 +151,17 @@ const STREAK_FREEZE_PER_MONTH = parseInt(process.env.STREAK_FREEZE_PER_MONTH || 
 // ── 멘토 하이라이트 시스템 ─────────────────────────────────
 const HELPER_THANKS_EMOJI = process.env.HELPER_THANKS_EMOJI || "🙏";
 const HONOR_CHANNEL_NAME = process.env.HONOR_CHANNEL_NAME || "명예의-전당";
-
-// ── 베테랑(무료 등급 최고 단계) 달성 축하 ─────────────────────
-const VETERAN_LOUNGE_CHANNEL_NAME = process.env.VETERAN_LOUNGE_CHANNEL_NAME || "베테랑-라운지";
+// 커뮤니티 초간소화 개편으로 HONOR_CHANNEL_NAME(명예의-전당)이 삭제된 경우를 대비해,
+// 못 찾으면 항상 존재하는 자유수다로 조용히 폴백합니다 (공개 축하 메시지가 아예
+// 발송되지 않고 사라지는 것을 막기 위함).
+const HONOR_CHANNEL_FALLBACK_NAME = "자유수다";
+function findAnnounceChannel(guild) {
+  return (
+    guild.channels.cache.find((c) => c.name === HONOR_CHANNEL_NAME && typeof c.send === "function") ||
+    guild.channels.cache.find((c) => c.name === HONOR_CHANNEL_FALLBACK_NAME && typeof c.send === "function") ||
+    null
+  );
+}
 
 // (리부트 버디 그룹 자동 매칭 시스템은 커뮤니티 초간소화 개편 때 삭제되었습니다.
 // #자유수다에서 자연스럽게 형성되는 관계로 대체합니다.)
@@ -261,9 +242,6 @@ const client = new Client({
 
 client.once(Events.ClientReady, (c) => {
   console.log(`[봇 시작] ${c.user.tag} 로 로그인 완료`);
-  if (FREE_LEVEL_ROLE_IDS.length === 0) {
-    console.warn("[설정 경고] ROLE_ID_FREE_LV1~4가 설정되어 있지 않아 일반멤버 4단계 등급 배지를 부여하지 못합니다.");
-  }
   if (!PAYAPP_USERID || !PAYAPP_LINKKEY || !PAYAPP_LINKVAL || !EBOOK_PRICE || !PUBLIC_BASE_URL) {
     console.warn("[설정 경고] PayApp 관련 환경변수가 부족해 전자책 자동결제/자동승급 기능이 동작하지 않습니다. .env.example을 참고해 채워주세요.");
   }
@@ -424,13 +402,9 @@ client.on(Events.MessageCreate, async (message) => {
       );
     }
 
-    const isGrowOrAbove = member.roles.cache.has(ROLE_ID_GROW) || member.roles.cache.has(ROLE_ID_MASTER);
-
-    if (!isGrowOrAbove) {
-      // 아직 전자책을 구매하지 않은 "일반멤버"는 누적 횟수로 4단계 배지만 오릅니다.
-      // (리부트-크루 승급 자체는 더 이상 누적 횟수가 아니라 전자책 구매로만 이루어집니다.)
-      await syncFreeLevel(member, newCount);
-    } else if (member.roles.cache.has(ROLE_ID_GROW) && !member.roles.cache.has(ROLE_ID_MASTER)) {
+    // (전자책을 구매하지 않은 "일반멤버"에게 부여되던 4단계 배지 시스템은 삭제되었습니다.
+    // 리부트-크루 승급은 전자책 구매로만 이루어집니다.)
+    if (member.roles.cache.has(ROLE_ID_GROW) && !member.roles.cache.has(ROLE_ID_MASTER)) {
       // 리부트-크루(=전자책 구매 완료)인 사람이 누적 인증을 계속 쌓으면 최종 단계인 마스터-크루로 승급합니다.
       if (newCount >= T_MASTER) {
         await member.roles.add(ROLE_ID_MASTER).catch((e) => console.error("[역할부여 실패] 마스터-크루", e));
@@ -572,63 +546,14 @@ client.on(Events.MessageCreate, async (message) => {
   }
 });
 
-// ── 일반멤버 4단계 등급 배지 동기화 ──────────────────────────
-async function syncFreeLevel(member, cumulativeCount) {
-  const target = FREE_LEVELS.find((lv) => lv.roleId && cumulativeCount >= lv.threshold);
-  if (!target) return; // 아직 어떤 단계도 설정 안 됐거나(ROLE_ID 미설정) 조건 미달
-
-  if (member.roles.cache.has(target.roleId)) return; // 이미 해당 등급 - 변화 없음
-
-  // 이전 단계 배지 제거 후 새 단계 배지 부여 (등급은 항상 하나만 유지)
-  for (const lv of FREE_LEVELS) {
-    if (lv.roleId && lv.roleId !== target.roleId && member.roles.cache.has(lv.roleId)) {
-      await member.roles.remove(lv.roleId).catch(() => {});
-    }
-  }
-  await member.roles.add(target.roleId).catch((e) => console.error(`[무료등급 역할부여 실패] ${target.label}`, e));
-  const user = getUser(member.id);
-
-  if (target.key === "lv4") {
-    // 무료 등급 중 최고 단계(베테랑) 달성은 따로 더 신경 써서 축하해줍니다.
-    await safeDM(
-      member,
-      `🔥 축하해요! 누적 인증 ${cumulativeCount}회를 채워서 무료 등급 중 최고 단계인 "베테랑"에 도달했어요.\n` +
-        `이제 #${VETERAN_LOUNGE_CHANNEL_NAME} 채널이 열렸고, #${SOS_CHANNEL_NAME} 헬퍼 알림 대상에도 포함돼요 — 도움받던 입장에서 이제 도움을 줄 수 있는 차례예요.\n` +
-        `여기까지 꾸준히 오신 것 자체가 정말 대단한 거예요. 혹시 다음 단계가 궁금하시면, 전자책을 구매하면 바로 리부트-크루로 승급돼요 (DM으로 "구매"라고 보내보세요).`
-    );
-    await announceVeteranAchievement(member.guild, member, cumulativeCount);
-  } else {
-    await safeDM(
-      member,
-      `🌱 활동 등급이 "${target.label}"(으)로 올랐어요! (누적 인증 ${cumulativeCount}회)\n${describeNextLevelProgress(member, user)}`
-    );
-  }
-  console.log(`[등급변경] ${member.user.tag} → ${target.label} (누적 ${cumulativeCount}회)`);
-}
-
-// ── 베테랑 달성 알림: 명예의-전당에 소개 ─────────────────────
-async function announceVeteranAchievement(guild, member, cumulativeCount) {
-  try {
-    const u = getUser(member.id);
-    if (u.publicAnnounceOptOut) return;
-    const channel = guild.channels.cache.find(
-      (c) => c.name === HONOR_CHANNEL_NAME && typeof c.send === "function"
-    );
-    if (!channel) return;
-    await channel.send(
-      `🔥 **${member.displayName}**님이 무료 등급 중 최고 단계인 베테랑(누적 인증 ${cumulativeCount}회)을 달성했어요! 꾸준함이 만든 결과예요, 축하해주세요 👏`
-    );
-  } catch (e) {
-    console.error("[베테랑 달성 알림 실패]", e);
-  }
-}
+// (일반멤버 4단계 등급 배지 동기화 함수 syncFreeLevel / announceVeteranAchievement 는
+// FREE_LEVELS 시스템과 함께 삭제되었습니다.)
 
 function describeCurrentLevel(member, user) {
   if (!member) return "-";
   if (member.roles.cache.has(ROLE_ID_MASTER)) return "마스터-크루";
   if (member.roles.cache.has(ROLE_ID_GROW)) return "리부트-크루";
-  const current = FREE_LEVELS.find((lv) => lv.roleId && member.roles.cache.has(lv.roleId));
-  return current ? current.label : "무료멤버";
+  return "무료멤버";
 }
 
 // 다음 등급까지 몇 회 남았는지 안내하는 문구를 만듭니다.
@@ -645,15 +570,7 @@ function describeNextLevelProgress(member, user) {
     return `마스터-크루까지 ${remaining}회 남았어요.`;
   }
 
-  // 무료 등급 (누적 횟수 오름차순으로 다음 단계를 찾음)
-  const ascending = [...FREE_LEVELS].reverse();
-  const next = ascending.find((lv) => lv.roleId && user.cumulativeCount < lv.threshold);
-  if (next) {
-    const remaining = next.threshold - user.cumulativeCount;
-    return `다음 등급 "${next.label}"까지 ${remaining}회 남았어요.`;
-  }
-
-  return `무료 등급은 모두 달성하셨어요! 전자책을 구매하면 바로 리부트-크루로 승급돼요 (DM으로 "구매"라고 보내보세요).`;
+  return `전자책을 구매하면 바로 리부트-크루로 승급돼요 (DM으로 "구매"라고 보내보세요).`;
 }
 
 // ── SOS 트리거 기록 / 주간 회고: 어떤 명령어에도 안 걸리는 DM은
@@ -1083,15 +1000,14 @@ async function promoteToGrowCrewByEbook(discordUserId) {
     const alreadyHadGrowRole = member.roles.cache.has(ROLE_ID_GROW);
 
     if (!alreadyHadGrowRole) {
-      // 일반멤버 등급 배지 제거
-      for (const lv of FREE_LEVELS) {
-        if (lv.roleId && member.roles.cache.has(lv.roleId)) {
-          await member.roles.remove(lv.roleId).catch(() => {});
-        }
-      }
       await member.roles.add(ROLE_ID_GROW).catch((e) => console.error("[역할부여 실패] 리부트-크루(전자책)", e));
     }
-    await safeDM(member, `전자책 구매가 확인됐어요! 리부트-크루로 승급했어요 🎉`);
+    await safeDM(
+      member,
+      `전자책 구매가 확인됐어요! 리부트-크루로 승급했어요 🎉\n` +
+        `SOS 요청이 올라오면 도움을 요청받는 헬퍼 알림 대상에도 포함됐어요.\n` +
+        `#함께-만들기 채널에서 새로운 아이디어나 초안을 가장 먼저 보고 의견 남기실 수 있어요.`
+    );
 
     await sendEbookToBuyer(member);
     if (!alreadyHadGrowRole) {
@@ -1249,9 +1165,8 @@ async function escalateToOnCall(message) {
 // ── 즉시반응 시스템: 최근 활동한 그로우/마스터-크루에게 조용히 알림 ──
 async function notifyHelpers(message) {
   const guild = message.guild;
-  // 리부트-크루/마스터-크루뿐 아니라, 무료회원 중 가장 활발한 베테랑(90회+) 등급도
-  // SOS 도움 요청에 응답해줄 수 있는 헬퍼 풀에 포함합니다.
-  const roleIds = [ROLE_ID_GROW, ROLE_ID_MASTER, process.env.ROLE_ID_FREE_LV4].filter(Boolean);
+  // 리부트-크루/마스터-크루가 SOS 도움 요청에 응답해줄 수 있는 헬퍼 풀입니다.
+  const roleIds = [ROLE_ID_GROW, ROLE_ID_MASTER].filter(Boolean);
   if (roleIds.length === 0) return;
 
   const members = await guild.members.fetch();
@@ -1291,9 +1206,7 @@ async function announcePromotion(guild, member, roleLabel) {
   try {
     const u = getUser(member.id);
     if (u.publicAnnounceOptOut) return;
-    const channel = guild.channels.cache.find(
-      (c) => c.name === HONOR_CHANNEL_NAME && typeof c.send === "function"
-    );
+    const channel = findAnnounceChannel(guild);
     if (!channel) return;
     await channel.send(`🎉 **${member.displayName}**님이 ${roleLabel}로 승급했어요! 축하해주세요 👏`);
   } catch (e) {
@@ -1520,9 +1433,7 @@ async function runWeeklyHighlightJob() {
 
   if (top) {
     const member = await guild.members.fetch(top.id).catch(() => null);
-    const channel = guild.channels.cache.find(
-      (c) => c.name === HONOR_CHANNEL_NAME && typeof c.send === "function"
-    );
+    const channel = findAnnounceChannel(guild);
     if (member && channel) {
       await channel
         .send(
