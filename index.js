@@ -55,14 +55,14 @@ const TEXT_OK_CHANNELS = (process.env.TEXT_OK_CHANNEL_NAMES || "충동분산-인
   .map((s) => s.trim())
   .filter(Boolean);
 
-// 마스터-크루는 "이미 그로우-크루(전자책 구매 완료)인 사람"이 누적 인증을 더 쌓았을 때 도달하는
-// 최종 등급입니다. (그로우-크루 자체는 더 이상 누적 횟수가 아니라 전자책 구매로만 승급합니다 - 아래 참고)
+// 마스터-크루는 "이미 리부트-크루(전자책 구매 완료)인 사람"이 누적 인증을 더 쌓았을 때 도달하는
+// 최종 등급입니다. (리부트-크루 자체는 더 이상 누적 횟수가 아니라 전자책 구매로만 승급합니다 - 아래 참고)
 const T_MASTER = parseInt(THRESHOLD_MASTER || "30", 10);
 const TZ = TIMEZONE || "Asia/Seoul";
 
 // ── 일반멤버(무료) 4단계 등급 시스템 ──────────────────────────
 // 전자책을 구매하기 전까지의 "일반사람들"은 누적 인증 횟수만으로 4단계를 올라갑니다.
-// 그로우-크루/마스터-크루로 승급하면 이 배지 역할은 자동으로 회수됩니다.
+// 리부트-크루/마스터-크루로 승급하면 이 배지 역할은 자동으로 회수됩니다.
 const FREE_LEVELS = [
   {
     key: "lv4",
@@ -442,10 +442,10 @@ client.on(Events.MessageCreate, async (message) => {
 
     if (!isGrowOrAbove) {
       // 아직 전자책을 구매하지 않은 "일반멤버"는 누적 횟수로 4단계 배지만 오릅니다.
-      // (그로우-크루 승급 자체는 더 이상 누적 횟수가 아니라 전자책 구매로만 이루어집니다.)
+      // (리부트-크루 승급 자체는 더 이상 누적 횟수가 아니라 전자책 구매로만 이루어집니다.)
       await syncFreeLevel(member, newCount);
     } else if (member.roles.cache.has(ROLE_ID_GROW) && !member.roles.cache.has(ROLE_ID_MASTER)) {
-      // 그로우-크루(=전자책 구매 완료)인 사람이 누적 인증을 계속 쌓으면 최종 단계인 마스터-크루로 승급합니다.
+      // 리부트-크루(=전자책 구매 완료)인 사람이 누적 인증을 계속 쌓으면 최종 단계인 마스터-크루로 승급합니다.
       if (newCount >= T_MASTER) {
         await member.roles.add(ROLE_ID_MASTER).catch((e) => console.error("[역할부여 실패] 마스터-크루", e));
         await safeDM(
@@ -608,7 +608,7 @@ async function syncFreeLevel(member, cumulativeCount) {
       member,
       `🔥 축하해요! 누적 인증 ${cumulativeCount}회를 채워서 무료 등급 중 최고 단계인 "베테랑"에 도달했어요.\n` +
         `이제 #${VETERAN_LOUNGE_CHANNEL_NAME} 채널이 열렸고, #${SOS_CHANNEL_NAME} 헬퍼 알림 대상에도 포함돼요 — 도움받던 입장에서 이제 도움을 줄 수 있는 차례예요.\n` +
-        `여기까지 꾸준히 오신 것 자체가 정말 대단한 거예요. 혹시 다음 단계가 궁금하시면, 전자책을 구매하면 바로 그로우-크루로 승급돼요 (DM으로 "구매"라고 보내보세요).`
+        `여기까지 꾸준히 오신 것 자체가 정말 대단한 거예요. 혹시 다음 단계가 궁금하시면, 전자책을 구매하면 바로 리부트-크루로 승급돼요 (DM으로 "구매"라고 보내보세요).`
     );
     await announceVeteranAchievement(member.guild, member, cumulativeCount);
   } else {
@@ -640,7 +640,7 @@ async function announceVeteranAchievement(guild, member, cumulativeCount) {
 function describeCurrentLevel(member, user) {
   if (!member) return "-";
   if (member.roles.cache.has(ROLE_ID_MASTER)) return "마스터-크루";
-  if (member.roles.cache.has(ROLE_ID_GROW)) return "그로우-크루";
+  if (member.roles.cache.has(ROLE_ID_GROW)) return "리부트-크루";
   const current = FREE_LEVELS.find((lv) => lv.roleId && member.roles.cache.has(lv.roleId));
   return current ? current.label : "무료멤버";
 }
@@ -667,7 +667,7 @@ function describeNextLevelProgress(member, user) {
     return `다음 등급 "${next.label}"까지 ${remaining}회 남았어요.`;
   }
 
-  return `무료 등급은 모두 달성하셨어요! 전자책을 구매하면 바로 그로우-크루로 승급돼요 (DM으로 "구매"라고 보내보세요).`;
+  return `무료 등급은 모두 달성하셨어요! 전자책을 구매하면 바로 리부트-크루로 승급돼요 (DM으로 "구매"라고 보내보세요).`;
 }
 
 // ── SOS 트리거 기록 / 주간 회고: 어떤 명령어에도 안 걸리는 DM은
@@ -746,12 +746,12 @@ async function handleSosPatternHistoryRequest(message) {
   await message.reply(`🫂 최근 남기신 SOS 기록이에요 (총 ${all.length}개 중 최근 ${recent.length}개)\n\n${text}${insight}`);
 }
 
-// ── 전자책 구매(그로우-크루 승급) ────────────────────────────
+// ── 전자책 구매(리부트-크루 승급) ────────────────────────────
 async function handleEbookPurchaseRequest(message) {
   const user = getUser(message.author.id);
 
   if (user.ebookPurchased) {
-    await message.reply("이미 전자책을 구매하고 그로우-크루로 승급하셨어요! 🎉");
+    await message.reply("이미 전자책을 구매하고 리부트-크루로 승급하셨어요! 🎉");
     return;
   }
 
@@ -769,7 +769,7 @@ async function handleEbookPurchaseRequest(message) {
     await message.reply(
       `📘 **${EBOOK_NAME}** 소개 페이지예요 👇 (본인 전용 링크라 다른 분과 공유하지 말아주세요)\n${personalizedUrl}\n\n` +
         `페이지를 다 보시고 "지금 리부트 시작하기" 버튼을 누르면 결제 페이지로 바로 넘어가요. 결제를 완료하시면,\n` +
-        `1) 자동으로 그로우-크루로 승급되고\n` +
+        `1) 자동으로 리부트-크루로 승급되고\n` +
         `2) 전자책 다운로드 링크를 이 DM으로 바로 보내드려요.\n` +
         `별도로 다시 뭘 누르실 필요 없이, 결제만 하시면 끝이에요!
 
@@ -790,7 +790,7 @@ async function handleEbookPurchaseRequest(message) {
     await message.reply(
       `📘 **${EBOOK_NAME}** 구매 링크예요 👇 (본인 확인용 링크라 다른 분과 공유하지 말고 1회만 사용해주세요)\n${payUrl}\n\n` +
         `위 링크를 누르면 PayApp 결제 전용 페이지가 열려요. 그 페이지에서 결제를 완료하시면,\n` +
-        `1) 자동으로 그로우-크루로 승급되고\n` +
+        `1) 자동으로 리부트-크루로 승급되고\n` +
         `2) 전자책 다운로드 링크를 이 DM으로 바로 보내드려요.\n` +
         `별도로 다시 뭘 누르실 필요 없이, 결제만 하시면 끝이에요!
 
@@ -872,7 +872,7 @@ async function handleWorkbookMasterUpload(message) {
 }
 
 // "!구매초기화" — 서버 운영자 전용. 테스트/환불 등의 사유로 본인 계정의
-// 전자책 구매 기록과 그로우-크루/마스터-크루 역할을 초기화해서, 처음 구매하는
+// 전자책 구매 기록과 리부트-크루/마스터-크루 역할을 초기화해서, 처음 구매하는
 // 것처럼 다시 결제~전자책 발급 흐름을 테스트할 수 있게 해줍니다.
 async function handleEbookPurchaseReset(message) {
   try {
@@ -895,8 +895,8 @@ async function handleEbookPurchaseReset(message) {
       removedRoles.push("마스터-크루");
     }
     if (member.roles.cache.has(ROLE_ID_GROW)) {
-      await member.roles.remove(ROLE_ID_GROW).catch((e) => console.error("[역할제거 실패] 그로우-크루", e));
-      removedRoles.push("그로우-크루");
+      await member.roles.remove(ROLE_ID_GROW).catch((e) => console.error("[역할제거 실패] 리부트-크루", e));
+      removedRoles.push("리부트-크루");
     }
 
     await message.reply(
@@ -1089,7 +1089,7 @@ async function promoteToGrowCrewByEbook(discordUserId) {
       console.error(`[전자책 승급 실패] 길드에서 멤버를 찾을 수 없음: ${discordUserId}`);
       return;
     }
-    // 주의: 예전엔 "이미 그로우-크루 역할이 있으면" 여기서 그냥 return 해버려서,
+    // 주의: 예전엔 "이미 리부트-크루 역할이 있으면" 여기서 그냥 return 해버려서,
     // (운영자가 테스트 등으로 역할을 미리 수동 부여해둔 경우) 실제 결제가 들어와도
     // 구매 확인 DM/전자책 다운로드 링크가 전혀 발송되지 않는 버그가 있었습니다.
     // 중복 웹훅 방지는 어차피 웹훅 단의 mul_no 기반 isPaymentProcessed()가 이미 담당하므로,
@@ -1103,13 +1103,13 @@ async function promoteToGrowCrewByEbook(discordUserId) {
           await member.roles.remove(lv.roleId).catch(() => {});
         }
       }
-      await member.roles.add(ROLE_ID_GROW).catch((e) => console.error("[역할부여 실패] 그로우-크루(전자책)", e));
+      await member.roles.add(ROLE_ID_GROW).catch((e) => console.error("[역할부여 실패] 리부트-크루(전자책)", e));
     }
-    await safeDM(member, `전자책 구매가 확인됐어요! 그로우-크루로 승급했어요 🎉`);
+    await safeDM(member, `전자책 구매가 확인됐어요! 리부트-크루로 승급했어요 🎉`);
 
     await sendEbookToBuyer(member);
     if (!alreadyHadGrowRole) {
-      await announcePromotion(guild, member, "그로우-크루");
+      await announcePromotion(guild, member, "리부트-크루");
     }
 
     // 구매 이전에 이미 누적 인증이 마스터-크루 기준을 넘어섰던 사람은
@@ -1225,7 +1225,7 @@ app.get("/go/:discordUserId", async (req, res) => {
     if (user.ebookPurchased) {
       return res
         .status(200)
-        .send("이미 구매를 완료하고 그로우-크루로 승급하셨어요! 디스코드로 돌아가서 DM으로 받은 전자책·워크북을 확인해보세요.");
+        .send("이미 구매를 완료하고 리부트-크루로 승급하셨어요! 디스코드로 돌아가서 DM으로 받은 전자책·워크북을 확인해보세요.");
     }
 
     if (!PAYAPP_USERID || !PAYAPP_LINKKEY || !PAYAPP_LINKVAL || !EBOOK_PRICE || !PUBLIC_BASE_URL) {
@@ -1263,7 +1263,7 @@ async function escalateToOnCall(message) {
 // ── 즉시반응 시스템: 최근 활동한 그로우/마스터-크루에게 조용히 알림 ──
 async function notifyHelpers(message) {
   const guild = message.guild;
-  // 그로우-크루/마스터-크루뿐 아니라, 무료회원 중 가장 활발한 베테랑(90회+) 등급도
+  // 리부트-크루/마스터-크루뿐 아니라, 무료회원 중 가장 활발한 베테랑(90회+) 등급도
   // SOS 도움 요청에 응답해줄 수 있는 헬퍼 풀에 포함합니다.
   const roleIds = [ROLE_ID_GROW, ROLE_ID_MASTER, process.env.ROLE_ID_FREE_LV4].filter(Boolean);
   if (roleIds.length === 0) return;
@@ -1449,21 +1449,21 @@ async function runDailyJob() {
     } else if (daysSinceJoin === 27 && !user.dmFlags.d27) {
       await safeDM(
         member,
-        `전자책을 구매하면 바로 그로우-크루로 승급되고, 전자책·워크북을 바로 받아보실 수 있어요. DM으로 "구매"라고 보내시면 구매 링크를 받아보실 수 있어요. 지금까지의 기록이 아깝지 않게, 한번 둘러보세요.`
+        `전자책을 구매하면 바로 리부트-크루로 승급되고, 전자책·워크북을 바로 받아보실 수 있어요. DM으로 "구매"라고 보내시면 구매 링크를 받아보실 수 있어요. 지금까지의 기록이 아깝지 않게, 한번 둘러보세요.`
       );
       markDmSent(member.id, "d27");
     } else if (daysSinceJoin === 29 && !user.dmFlags.d29) {
       await safeDM(
         member,
         `벌써 가입한 지 29일째예요! 지금까지 누적 인증 ${user.cumulativeCount}회, 현재 등급: ${describeCurrentLevel(member, user)}.\n` +
-          `여기까지 꾸준히 잘 오셨어요. 그로우-크루로 승급하면 전자책·워크북을 바로 받아보실 수 있으니, 아직이시라면 한번 살펴보세요.`
+          `여기까지 꾸준히 잘 오셨어요. 리부트-크루로 승급하면 전자책·워크북을 바로 받아보실 수 있으니, 아직이시라면 한번 살펴보세요.`
       );
       markDmSent(member.id, "d29");
     } else if (daysSinceJoin === 30 && !user.dmFlags.d30) {
       await safeDM(
         member,
         `가입한 지 한 달이 됐어요 🎉 그동안 쌓아온 기록은 계속 그대로 남아있으니 걱정 마세요.\n` +
-          `DM으로 "구매"라고 보내시면 전자책 구매 링크를 바로 받아보실 수 있고, 결제 완료 즉시 그로우-크루로 승급돼요.` +
+          `DM으로 "구매"라고 보내시면 전자책 구매 링크를 바로 받아보실 수 있고, 결제 완료 즉시 리부트-크루로 승급돼요.` +
           (PAYMENT_LINK ? `\n더 알아보기 👉 ${PAYMENT_LINK}` : "")
       );
       markDmSent(member.id, "d30");
