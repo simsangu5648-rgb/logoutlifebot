@@ -19,12 +19,6 @@ const {
   allUserIds,
   isPaymentProcessed,
   markPaymentProcessed,
-  addToBuddyPool,
-  clearBuddyPool,
-  nextBuddyGroupNumber,
-  getBuddyGroups,
-  addBuddyGroupRecord,
-  removeBuddyGroupRecord,
 } = require("./lib/store");
 
 const {
@@ -189,26 +183,8 @@ const HONOR_CHANNEL_NAME = process.env.HONOR_CHANNEL_NAME || "명예의-전당";
 // ── 베테랑(무료 등급 최고 단계) 달성 축하 ─────────────────────
 const VETERAN_LOUNGE_CHANNEL_NAME = process.env.VETERAN_LOUNGE_CHANNEL_NAME || "베테랑-라운지";
 
-// ── 리부트 버디 그룹 (그로우-크루 전용) ─────────────────────────
-// 전자책을 구매해 그로우-크루가 된 멤버가 이만큼 모이면 자동으로 역할+비공개 채널을 만들어 묶어줍니다.
-// 무료멤버 대상 버디 그룹은 폐지되었고, 이제 결제(리부트 시작) 시점에만 대기열에 들어갑니다.
-// 봇에게 "채널 관리(Manage Channels)" 권한이 필요합니다.
-const BUDDY_GROUP_SIZE = parseInt(process.env.BUDDY_GROUP_SIZE || "5", 10);
-const BUDDY_CATEGORY_NAME = process.env.BUDDY_CATEGORY_NAME || "리부트 버디 그룹";
-const BUDDY_GROUPS_ENABLED = process.env.BUDDY_GROUPS_ENABLED !== "false";
-
-// 버디 그룹 채팅방이 대화 없이 조용해지지 않도록, 매주 한 번씩 봇이 안부 메시지를 보냅니다.
-const BUDDY_CHECKIN_CRON = process.env.BUDDY_CHECKIN_CRON || "0 20 * * 3"; // 기본: 매주 수요일 저녁 8시
-const BUDDY_CHECKIN_MESSAGES = [
-  "이번 주는 다들 어떻게 지내고 계세요? 짧게라도 안부 한마디 남겨주세요 🙂",
-  "오늘 인증한 거 있으면 여기에도 슬쩍 공유해봐요. 서로 보면 은근 힘이 돼요.",
-  "이번 주 컨디션은 어떤가요? 잘 되고 있는 것도, 힘든 것도 편하게 나눠주세요.",
-  "다들 잘 지내고 계신가요? 오늘 하루 어땠는지 한 줄씩 남겨봐요.",
-  "버디 여러분, 이번 주 목표 잘 지키고 계세요? 서로 응원 한마디씩 남겨주세요 💪",
-  "요즘 가장 힘든 순간이 언제인지, 그리고 어떻게 넘기고 있는지 나눠보면 어떨까요?",
-  "이번 주도 다들 고생 많으셨어요. 스스로 잘한 점 하나씩만 남겨볼까요?",
-  "오랜만에 조용했네요 🙂 다들 잘 지내고 계신지 안부 여쭤봐요.",
-];
+// (리부트 버디 그룹 자동 매칭 시스템은 커뮤니티 초간소화 개편 때 삭제되었습니다.
+// #자유수다에서 자연스럽게 형성되는 관계로 대체합니다.)
 
 // ── 주간 팁 & 회고 ──────────────────────────────────────────
 const REFLECTION_REPLY_WINDOW_HOURS = parseInt(process.env.REFLECTION_REPLY_WINDOW_HOURS || "24", 10);
@@ -232,63 +208,8 @@ const REFLECTION_QUESTIONS = [
   "다음 주에 하나만 바꿀 수 있다면 뭘 바꾸고 싶나요?",
 ];
 
-// ── 이주의 챌린지 (그로우-크루/마스터-크루 전용) ──────────────
-// 50개를 순서대로 돌리고, 51주차부터는 다시 1번으로 돌아가 계속 반복됩니다.
-const CHALLENGE_CHANNEL_NAME = process.env.CHALLENGE_CHANNEL_NAME || "이주의-챌린지";
-const CHALLENGE_VERIFY_CHANNEL_NAME = process.env.CHALLENGE_VERIFY_CHANNEL_NAME || "챌린지-인증";
-
-const WEEKLY_CHALLENGES = [
-  "나를 자극하는 트리거(시간대/감정/장소) 하나 찾아서 적어보기",
-  "이번 주 3일 이상 #충동분산-인증에 인증 남기기",
-  "자기 전 30분은 폰을 침실 밖에 두고 자보기",
-  "차단 앱/필터 하나 설치해보기 (아직 안 했다면)",
-  "아침에 눈뜨자마자 폰 대신 물 한 잔부터 마시기, 3일 이상 시도",
-  "#충동-sos에 한 번도 안 써봤다면, 충동이 올 때 딱 한 번 글 남겨보기",
-  "잘 모르는 멤버 한 명에게 먼저 안부 인사 남기기",
-  "자기 전 알람을 다른 방에 두고 자보기 (폰 대신 물리 알람 사용)",
-  "자극적인 콘텐츠로 이어지는 앱 알림 5개 이상 꺼보기",
-  "하루 동안 SNS 없이 지내보기 (딱 하루만)",
-  "산책이나 운동 10분, 3일 이상 해보기",
-  "이번 주 회고 질문(주간 팁 DM)에 답장 한 번 남겨보기",
-  "#자유수다에 이번 주 버틴 순간 하나 자랑해보기",
-  "이번 주 트리거 기록을 매일 확인해보기",
-  "폰 없이 밥 한 끼, 3번 이상 먹어보기",
-  "유튜브나 SNS 앱에 하루 사용 제한 시간을 걸어보기",
-  "잠들기 전 5분, 오늘 있었던 좋은 일 하나 적어보기 (3일 이상)",
-  "충동이 올 때 5분만 미뤄보기, 이번 주 한 번이라도 성공해보기",
-  "다른 멤버의 승급 소식이나 글에 리액션 남겨주기",
-  "밤 시간대(재발 위험이 큰 시간)를 위한 새로운 루틴 하나 만들어보기",
-  "이번 주 3일 이상 #오늘도안봤어요-인증 남기기",
-  "충동이 올 때 쓸 대체 행동(운동, 그림, 악기 등) 하나 정해서 이번 주 2번 시도해보기",
-  "자기 전 루틴에서 폰 보는 시간을 10분만 줄여보기, 3일 이상",
-  "오늘 하루는 자극적인 콘텐츠로 이어지는 피드를 아예 열지 않아보기",
-  "낮잠이나 짧은 휴식을 폰 없이 취해보기, 2번 이상",
-  "#충동분산-인증에 사진 대신 글로 오늘 하루 짧게 남겨보기",
-  "이번 주 한 번은 도움이 필요해 보이는 멤버에게 먼저 댓글 남겨보기",
-  "충동 신호가 느껴지면 그 순간 딱 5분만 다른 걸 해보기",
-  "주말 중 하루는 오전 시간대(기상~정오) 동안 폰 사용 최소화해보기",
-  "이번 주 스트릭을 하루도 안 끊기게 유지해보기",
-  "새로운 대체 취미(운동, 독서, 요리 등) 하나 이번 주에 딱 한 번 시도해보기",
-  "폰 잠금화면 배경을 \"지금 이걸 왜 켰지?\"로 바꿔서 트리거를 인식해보기",
-  "이번 주 3일 이상 아침 기상 직후 1시간 동안 폰 안 보기",
-  "#충동-sos에서 다른 멤버 글에 응원 댓글 한 번 남겨보기",
-  "밖에 나가서 20분 이상 걷기, 이번 주 2번 이상",
-  "실제로 사람 만나는 약속 하나 잡아보기 (관계 회복 연습)",
-  "미디어 없이 혼자 있는 시간을 하루 15분씩 가져보기, 이번 주에",
-  "재발했다면 숨기지 않고 솔직하게 기록해보기 — 완벽보다 정직이 먼저예요",
-  "버디 그룹이 있다면 이번 주 안부 한 번 물어보기",
-  "자기 전 명상이나 심호흡 5분, 3일 이상 시도해보기",
-  "오늘 하루는 폰을 무음이나 방해금지 모드로 지내보기",
-  "이번 주 3일 이상 아무 인증이든 남겨서 스트릭 유지해보기",
-  "자극적인 콘텐츠로 이어지는 계정/구독 5개 이상 정리해보기",
-  "충동이 올라올 때 물 한 잔 마시고 60초만 버텨보기, 이번 주 한 번이라도",
-  "폰 없이 샤워 후 15분 정도 여유 시간 가져보기",
-  "이번 주 하루는 저녁 시간(2시간) 동안 폰을 아예 다른 방에 둬보기",
-  "#자기소개 채널에 오랜만에 근황 한 줄 남겨보기",
-  "나를 가장 많이 자극하는 상황 하나를 찾아 이번 주엔 미리 피해보기",
-  "이번 주 목표를 스스로 정하고 #자유수다에 선언해보기",
-  "이번 주 가장 뿌듯했던 순간을 스스로 떠올려보고 댓글로 남겨보기",
-];
+// (자동 발행되던 "이주의 챌린지" 시스템은 커뮤니티 초간소화 개편 때 삭제되었습니다.
+// 챌린지는 이제 sim이 필요할 때만 수동으로 공지하는 이벤트로 운영합니다.)
 
 function todayKST() {
   // YYYY-MM-DD, TZ 기준
@@ -354,8 +275,7 @@ client.once(Events.ClientReady, (c) => {
   scheduleStreakReminderJob();
   scheduleWeeklyHighlightJob();
   scheduleWeeklyTipJob();
-  scheduleWeeklyChallengeJob();
-  scheduleBuddyCheckinJob();
+  scheduleInsightReminderJob();
 });
 
 // ── 신규 멤버 자동 역할 부여 ───────────────────────────────
@@ -530,7 +450,7 @@ client.on(Events.MessageCreate, async (message) => {
         await member.roles.add(ROLE_ID_MASTER).catch((e) => console.error("[역할부여 실패] 마스터-크루", e));
         await safeDM(
           member,
-          `축하해요! 누적 ${newCount}회 기록을 달성해서 마스터-크루로 승급했어요. #마스터-크루, #우선질문 채널이 열렸습니다.\n🏆 마스터-크루는 최종 등급이에요. 여기까지 와주셔서 정말 대단해요!`
+          `축하해요! 누적 ${newCount}회 기록을 달성해서 마스터-크루로 승급했어요.\n🏆 마스터-크루는 최종 등급이에요. 여기까지 와주셔서 정말 대단해요!`
         );
         await announcePromotion(message.guild, member, "마스터-크루");
       } else {
@@ -849,7 +769,7 @@ async function handleEbookPurchaseRequest(message) {
     await message.reply(
       `📘 **${EBOOK_NAME}** 소개 페이지예요 👇 (본인 전용 링크라 다른 분과 공유하지 말아주세요)\n${personalizedUrl}\n\n` +
         `페이지를 다 보시고 "지금 리부트 시작하기" 버튼을 누르면 결제 페이지로 바로 넘어가요. 결제를 완료하시면,\n` +
-        `1) 자동으로 그로우-크루로 승급되고 (#그로우-라운지 채널 오픈 + 공개 축하)\n` +
+        `1) 자동으로 그로우-크루로 승급되고\n` +
         `2) 전자책 다운로드 링크를 이 DM으로 바로 보내드려요.\n` +
         `별도로 다시 뭘 누르실 필요 없이, 결제만 하시면 끝이에요!
 
@@ -870,7 +790,7 @@ async function handleEbookPurchaseRequest(message) {
     await message.reply(
       `📘 **${EBOOK_NAME}** 구매 링크예요 👇 (본인 확인용 링크라 다른 분과 공유하지 말고 1회만 사용해주세요)\n${payUrl}\n\n` +
         `위 링크를 누르면 PayApp 결제 전용 페이지가 열려요. 그 페이지에서 결제를 완료하시면,\n` +
-        `1) 자동으로 그로우-크루로 승급되고 (#그로우-라운지 채널 오픈 + 공개 축하)\n` +
+        `1) 자동으로 그로우-크루로 승급되고\n` +
         `2) 전자책 다운로드 링크를 이 DM으로 바로 보내드려요.\n` +
         `별도로 다시 뭘 누르실 필요 없이, 결제만 하시면 끝이에요!
 
@@ -1185,12 +1105,8 @@ async function promoteToGrowCrewByEbook(discordUserId) {
       }
       await member.roles.add(ROLE_ID_GROW).catch((e) => console.error("[역할부여 실패] 그로우-크루(전자책)", e));
     }
-    await safeDM(member, `전자책 구매가 확인됐어요! 그로우-크루로 승급했어요 🎉 #그로우-라운지 채널이 열렸습니다.`);
+    await safeDM(member, `전자책 구매가 확인됐어요! 그로우-크루로 승급했어요 🎉`);
 
-    if (BUDDY_GROUPS_ENABLED && !alreadyHadGrowRole) {
-      // 전자책 구매(리부트 시작) 시점에 리부트 버디 그룹 대기열에 추가 (그룹 인원이 차면 자동으로 채널을 만들어드려요)
-      addMemberToBuddyPool(guild, member).catch((e) => console.error("[버디풀 처리 오류]", e));
-    }
     await sendEbookToBuyer(member);
     if (!alreadyHadGrowRole) {
       await announcePromotion(guild, member, "그로우-크루");
@@ -1203,7 +1119,7 @@ async function promoteToGrowCrewByEbook(discordUserId) {
       await member.roles.add(ROLE_ID_MASTER).catch((e) => console.error("[역할부여 실패] 마스터-크루(구매 즉시)", e));
       await safeDM(
         member,
-        `그동안 쌓아온 누적 ${u.cumulativeCount}회 기록 덕분에 마스터-크루로도 바로 승급했어요! #마스터-크루, #우선질문 채널이 열렸습니다.`
+        `그동안 쌓아온 누적 ${u.cumulativeCount}회 기록 덕분에 마스터-크루로도 바로 승급했어요!`
       );
       await announcePromotion(guild, member, "마스터-크루");
     }
@@ -1309,7 +1225,7 @@ app.get("/go/:discordUserId", async (req, res) => {
     if (user.ebookPurchased) {
       return res
         .status(200)
-        .send("이미 구매를 완료하고 그로우-크루로 승급하셨어요! 디스코드로 돌아가서 #그로우-라운지를 확인해보세요.");
+        .send("이미 구매를 완료하고 그로우-크루로 승급하셨어요! 디스코드로 돌아가서 DM으로 받은 전자책·워크북을 확인해보세요.");
     }
 
     if (!PAYAPP_USERID || !PAYAPP_LINKKEY || !PAYAPP_LINKVAL || !EBOOK_PRICE || !PUBLIC_BASE_URL) {
@@ -1342,85 +1258,6 @@ async function escalateToOnCall(message) {
   );
   if (!channel) return;
   await channel.send(`🚨 <@&${ONCALL_ROLE_ID}> #${SOS_CHANNEL_NAME}에 새 SOS 요청이 있어요.\n${message.url}`);
-}
-
-// ── 리부트 버디 그룹: 전자책을 구매한(그로우-크루) 멤버들을 모아 자동으로 소그룹(역할+비공개 채널)을 만듭니다 ──
-async function addMemberToBuddyPool(guild, member) {
-  const pool = addToBuddyPool(member.id);
-  if (pool.length < BUDDY_GROUP_SIZE) return;
-
-  const groupMemberIds = pool.slice(0, BUDDY_GROUP_SIZE);
-  const leftover = pool.slice(BUDDY_GROUP_SIZE);
-  clearBuddyPool();
-  for (const id of leftover) addToBuddyPool(id); // 동시에 더 쌓였을 수 있는 인원은 다음 그룹으로
-
-  await formBuddyGroup(guild, groupMemberIds);
-}
-
-async function formBuddyGroup(guild, memberIds) {
-  const groupNumber = nextBuddyGroupNumber();
-  const roleName = `리부트버디-${groupNumber}`;
-  const channelName = `리부트-버디-${groupNumber}`;
-
-  try {
-    const role = await guild.roles.create({ name: roleName, mentionable: true, reason: "리부트 버디 그룹 자동 생성" });
-
-    let category = guild.channels.cache.find(
-      (c) => c.name === BUDDY_CATEGORY_NAME && c.type === ChannelType.GuildCategory
-    );
-    if (!category) {
-      category = await guild.channels.create({
-        name: BUDDY_CATEGORY_NAME,
-        type: ChannelType.GuildCategory,
-        reason: "리부트 버디 그룹 카테고리 자동 생성",
-      });
-    }
-
-    const overwrites = [
-      { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
-      {
-        id: role.id,
-        allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
-      },
-    ];
-    if (guild.members.me) {
-      overwrites.push({
-        id: guild.members.me.id,
-        allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels],
-      });
-    }
-
-    const channel = await guild.channels.create({
-      name: channelName,
-      type: ChannelType.GuildText,
-      parent: category.id,
-      permissionOverwrites: overwrites,
-      reason: "리부트 버디 그룹 채널 자동 생성",
-    });
-
-    const mentions = [];
-    for (const id of memberIds) {
-      const m = await guild.members.fetch(id).catch(() => null);
-      if (!m) continue;
-      await m.roles.add(role).catch((e) => console.error("[버디 역할부여 실패]", e));
-      updateUser(id, { buddyGroupNumber: groupNumber, buddyRoleId: role.id, buddyChannelId: channel.id });
-      mentions.push(`<@${id}>`);
-    }
-
-    await channel.send(
-      `👋 ${mentions.join(" ")}\n` +
-        `비슷한 시기에 전자책을 구매하고 리부트를 시작한 분들끼리 작은 버디 그룹으로 묶어드렸어요!\n\n` +
-        `이 채널은 이렇게 쓰시면 좋아요.\n` +
-        `- 오늘 인증한 스크린샷이나 짧은 한 줄을 여기에도 남겨보세요. 같은 걸 겪는 사람들이 보면 그 자체로 자극이 돼요.\n` +
-        `- 힘든 날엔 여기서 먼저 말을 걸어보세요. 제일 잘 이해해줄 사람들이에요.\n` +
-        `- 가끔 서로 안부만 물어봐도 충분해요. 정해진 규칙은 없어요.\n\n` +
-        `혼자보다 몇 명이서 같이 하는 게 훨씬 오래갑니다 🙂`
-    );
-    addBuddyGroupRecord({ groupNumber, channelId: channel.id, roleId: role.id });
-    console.log(`[리부트버디그룹 생성] ${roleName} / ${channelName} (${memberIds.length}명)`);
-  } catch (e) {
-    console.error("[리부트버디그룹 생성 실패] (봇에 '채널 관리' 권한이 있는지 확인해주세요)", e);
-  }
 }
 
 // ── 즉시반응 시스템: 최근 활동한 그로우/마스터-크루에게 조용히 알림 ──
@@ -1558,27 +1395,21 @@ async function runDailyJob() {
       }
     }
 
-    // 2) 온보딩 미션 시퀀스 (가입 D+1/3/7) - 결제 여부와 무관하게 모두 대상
+    // 2) 온보딩 웰컴 DM (가입 D+1/3) - 가벼운 안내만, 결제 여부와 무관하게 모두 대상
     if (member.joinedAt) {
       const daysSinceJoin = daysBetween(member.joinedAt, now);
       if (daysSinceJoin === 1 && !user.dmFlags.o1) {
         await safeDM(
           member,
-          `가입한 지 하루 됐어요! 오늘의 미션: #오늘도안봤어요-인증이나 #충동분산-인증에 오늘 하루를 기록해보세요. 사진이어도 좋고 짧은 한 줄이어도 좋아요.`
+          `가입한 지 하루 됐어요! 아직이라면 #자기소개에 편하게 인사 한마디 남겨보세요.`
         );
         markDmSent(member.id, "o1");
       } else if (daysSinceJoin === 3 && !user.dmFlags.o3) {
         await safeDM(
           member,
-          `벌써 3일째예요! 오늘은 #자유수다에 인사 한마디 남겨보는 거 어때요? 혼자보다 같이가 훨씬 오래 갑니다.`
+          `벌써 3일째예요! 오늘은 #자유수다에 아무 얘기나 편하게 남겨보는 거 어때요? 혼자보다 같이가 훨씬 오래 갑니다.`
         );
         markDmSent(member.id, "o3");
-      } else if (daysSinceJoin === 7 && !user.dmFlags.o7) {
-        await safeDM(
-          member,
-          `가입한 지 일주일이에요. 지금까지 누적 인증 ${user.cumulativeCount}회 하셨어요. 꾸준히 잘 해오고 계세요, 계속 가봐요!`
-        );
-        markDmSent(member.id, "o7");
       }
     }
 
@@ -1618,15 +1449,14 @@ async function runDailyJob() {
     } else if (daysSinceJoin === 27 && !user.dmFlags.d27) {
       await safeDM(
         member,
-        `그로우-크루가 되면 #그로우-라운지 같은 전용 공간이 열리고, 꾸준히 더 쌓으면 최종 등급인 마스터-크루까지 갈 수 있어요.\n` +
-          `전자책을 구매하면 바로 그로우-크루로 승급돼요. DM으로 "구매"라고 보내시면 구매 링크를 받아보실 수 있어요. 지금까지의 기록이 아깝지 않게, 한번 둘러보세요.`
+        `전자책을 구매하면 바로 그로우-크루로 승급되고, 전자책·워크북을 바로 받아보실 수 있어요. DM으로 "구매"라고 보내시면 구매 링크를 받아보실 수 있어요. 지금까지의 기록이 아깝지 않게, 한번 둘러보세요.`
       );
       markDmSent(member.id, "d27");
     } else if (daysSinceJoin === 29 && !user.dmFlags.d29) {
       await safeDM(
         member,
         `벌써 가입한 지 29일째예요! 지금까지 누적 인증 ${user.cumulativeCount}회, 현재 등급: ${describeCurrentLevel(member, user)}.\n` +
-          `여기까지 꾸준히 잘 오셨어요. 그로우-크루로 승급하면 전용 공간과 콘텐츠가 열리니, 아직이시라면 한번 살펴보세요.`
+          `여기까지 꾸준히 잘 오셨어요. 그로우-크루로 승급하면 전자책·워크북을 바로 받아보실 수 있으니, 아직이시라면 한번 살펴보세요.`
       );
       markDmSent(member.id, "d29");
     } else if (daysSinceJoin === 30 && !user.dmFlags.d30) {
@@ -1755,67 +1585,30 @@ async function runWeeklyTipJob() {
   }
 }
 
-// ── 이주의 챌린지: 매주 새 미션 발행 ─────────────────────────
-function scheduleWeeklyChallengeJob() {
-  const expr = process.env.CHALLENGE_CRON || "0 9 * * 1"; // 기본: 매주 월요일 오전 9시
+// ── 이주의 인사이트: sim에게만 매주 업로드 리마인더 DM ─────────
+// 매주 월요일 아침, 서버 소유자(sim)에게만 "이번 주 인사이트 올려주세요" DM을 보냅니다.
+// 형식은 자유(링크/짧은 생각/책 구절 등) — 봇은 리마인더만 담당하고 실제 게시는 sim이 수동으로 합니다.
+function scheduleInsightReminderJob() {
+  const expr = process.env.INSIGHT_REMINDER_CRON || "0 9 * * 1"; // 기본: 매주 월요일 오전 9시
   cron.schedule(
     expr,
-    () => runWeeklyChallengeJob().catch((e) => console.error("[주간 챌린지 오류]", e)),
+    () => runInsightReminderJob().catch((e) => console.error("[주간 인사이트 리마인더 오류]", e)),
     { timezone: TZ }
   );
-  console.log(`[예약 등록] 주간 챌린지 cron: "${expr}" (${TZ})`);
+  console.log(`[예약 등록] 주간 인사이트 리마인더 cron: "${expr}" (${TZ})`);
 }
 
-async function runWeeklyChallengeJob() {
+async function runInsightReminderJob() {
   const guild = await client.guilds.fetch(GUILD_ID);
-  const channel = guild.channels.cache.find(
-    (c) => c.name === CHALLENGE_CHANNEL_NAME && typeof c.send === "function"
-  );
-  if (!channel) return;
-
-  const weekKey = isoWeekKey(new Date());
-  const weekNum = parseInt(weekKey.split("-W")[1], 10) || 0;
-  // 50개를 순서대로 돌리고, 다 쓰면(51주차부터) 다시 처음으로 돌아가 계속 반복됩니다.
-  const challenge = WEEKLY_CHALLENGES[weekNum % WEEKLY_CHALLENGES.length];
-
-  const verifyChannel = guild.channels.cache.find(
-    (c) => c.name === CHALLENGE_VERIFY_CHANNEL_NAME && typeof c.send === "function"
-  );
-  const verifyMention = verifyChannel ? `<#${verifyChannel.id}>` : `#${CHALLENGE_VERIFY_CHANNEL_NAME}`;
-
-  await channel
-    .send(`🎯 이번 주 챌린지\n\n${challenge}\n\n완료했다면 ${verifyMention} 에서 인증해주세요!`)
-    .catch((e) => console.error("[주간 챌린지 발행 실패]", e));
-}
-
-// ── 버디 그룹 채널 주간 안부: 채팅방이 조용해지지 않도록 매주 한 번 메시지를 보냅니다 ──
-function scheduleBuddyCheckinJob() {
-  cron.schedule(
-    BUDDY_CHECKIN_CRON,
-    () => runBuddyCheckinJob().catch((e) => console.error("[버디 안부 오류]", e)),
-    { timezone: TZ }
-  );
-  console.log(`[예약 등록] 버디 안부 cron: "${BUDDY_CHECKIN_CRON}" (${TZ})`);
-}
-
-async function runBuddyCheckinJob() {
-  const groups = getBuddyGroups();
-  if (groups.length === 0) return;
-
-  const guild = await client.guilds.fetch(GUILD_ID);
-  const weekKey = isoWeekKey(new Date());
-  const weekNum = parseInt(weekKey.split("-W")[1], 10) || 0;
-  const message = BUDDY_CHECKIN_MESSAGES[weekNum % BUDDY_CHECKIN_MESSAGES.length];
-
-  for (const group of groups) {
-    const channel = await guild.channels.fetch(group.channelId).catch(() => null);
-    if (!channel) {
-      // 채널이 삭제된 경우, 다음부터는 대상에서 제외되도록 기록을 정리합니다.
-      removeBuddyGroupRecord(group.channelId);
-      continue;
-    }
-    await channel.send(`👋 ${message}`).catch((e) => console.error("[버디 안부 발송 실패]", e));
+  const owner = await guild.members.fetch(guild.ownerId).catch(() => null);
+  if (!owner) {
+    console.error("[주간 인사이트 리마인더 실패] 서버 소유자를 찾을 수 없습니다.");
+    return;
   }
+  await safeDM(
+    owner,
+    `📝 이번 주 #이주의-인사이트 올릴 차례예요.\n형식은 자유예요 — 링크 하나, 짧은 생각, 책 구절 뭐든 좋아요.`
+  );
 }
 
 function markDmSent(userId, key) {
