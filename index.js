@@ -27,7 +27,6 @@ const {
   ROLE_ID_REBOOT,
   ROLE_ID_GROW,
   ROLE_ID_MASTER,
-  ROLE_ID_FREE,
   TRACK_CHANNEL_NAMES,
   THRESHOLD_MASTER,
   PAYMENT_LINK,
@@ -262,9 +261,6 @@ const client = new Client({
 
 client.once(Events.ClientReady, (c) => {
   console.log(`[봇 시작] ${c.user.tag} 로 로그인 완료`);
-  if (!ROLE_ID_FREE) {
-    console.warn("[설정 경고] ROLE_ID_FREE가 없어 신규 멤버에게 무료멤버 역할을 자동으로 부여하지 못합니다. .env.example을 참고해 채워주세요.");
-  }
   if (FREE_LEVEL_ROLE_IDS.length === 0) {
     console.warn("[설정 경고] ROLE_ID_FREE_LV1~4가 설정되어 있지 않아 일반멤버 4단계 등급 배지를 부여하지 못합니다.");
   }
@@ -278,18 +274,8 @@ client.once(Events.ClientReady, (c) => {
   scheduleInsightReminderJob();
 });
 
-// ── 신규 멤버 자동 역할 부여 ───────────────────────────────
-client.on(Events.GuildMemberAdd, async (member) => {
-  try {
-    if (member.guild.id !== GUILD_ID) return;
-    if (!ROLE_ID_FREE) return; // 설정 안 됐으면 조용히 스킵 (시작 시 경고는 이미 남김)
-
-    await member.roles.add(ROLE_ID_FREE);
-    console.log(`[역할부여] ${member.user.tag} 에게 무료멤버 역할 부여 완료`);
-  } catch (err) {
-    console.error("[GuildMemberAdd 처리 오류]", err);
-  }
-});
+// (무료멤버 자동 역할 부여는 커뮤니티 초간소화 개편으로 무료 등급 자체가
+// 없어지면서 삭제되었습니다. 이제 신규 멤버는 별도 역할 없이 서버에 바로 참여합니다.)
 
 // ── 메시지 처리: 체크인 카운트 + SOS 즉시반응 + DM 명령어 + 스트릭 조회 ──
 client.on(Events.MessageCreate, async (message) => {
