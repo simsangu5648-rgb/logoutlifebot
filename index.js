@@ -1371,7 +1371,10 @@ async function runDailyJob() {
       }
     }
 
-    // 4) 결제전환 시퀀스 (D+25/27/29/30) - 아직 전자책을 구매하지 않은 사람만
+    // 4) 결제전환 시퀀스 (D+25/32/40) - 아직 전자책을 구매하지 않은 사람만
+    // 예전엔 D+25/27/29/30로 뒤로 갈수록 간격(2일→2일→1일)이 좁아져서 점점
+    // 재촉하는 느낌을 줬습니다. 지금은 7일/8일 간격으로 고르게 벌렸고, "가입 N일
+    // 축하" 같은 감정 표현과 구매 안내를 한 문장에 묶지 않도록 정리했습니다.
     if (user.ebookPurchased) continue;
     if (!member.joinedAt) continue;
 
@@ -1383,27 +1386,20 @@ async function runDailyJob() {
         `지금까지 쌓은 기록을 정리해봤어요.\n누적 인증 ${user.cumulativeCount}회, 현재 등급: ${describeCurrentLevel(member, user)}.\n${describeNextLevelProgress(member, user)}\n꾸준히 잘 해오고 계세요!`
       );
       markDmSent(member.id, "d25");
-    } else if (daysSinceJoin === 27 && !user.dmFlags.d27) {
+    } else if (daysSinceJoin === 32 && !user.dmFlags.d32) {
       await safeDM(
         member,
         `전자책을 구매하면 바로 리부트-크루로 승급되고, 전자책·워크북을 바로 받아보실 수 있어요. DM으로 "구매"라고 보내시면 구매 링크를 받아보실 수 있어요. 지금까지의 기록이 아깝지 않게, 한번 둘러보세요.`
       );
-      markDmSent(member.id, "d27");
-    } else if (daysSinceJoin === 29 && !user.dmFlags.d29) {
+      markDmSent(member.id, "d32");
+    } else if (daysSinceJoin === 40 && !user.dmFlags.d40) {
       await safeDM(
         member,
-        `벌써 가입한 지 29일째예요! 지금까지 누적 인증 ${user.cumulativeCount}회, 현재 등급: ${describeCurrentLevel(member, user)}.\n` +
-          `여기까지 꾸준히 잘 오셨어요. 리부트-크루로 승급하면 전자책·워크북을 바로 받아보실 수 있으니, 아직이시라면 한번 살펴보세요.`
-      );
-      markDmSent(member.id, "d29");
-    } else if (daysSinceJoin === 30 && !user.dmFlags.d30) {
-      await safeDM(
-        member,
-        `가입한 지 한 달이 됐어요 🎉 그동안 쌓아온 기록은 계속 그대로 남아있으니 걱정 마세요.\n` +
-          `DM으로 "구매"라고 보내시면 전자책 구매 링크를 바로 받아보실 수 있고, 결제 완료 즉시 리부트-크루로 승급돼요.` +
+        `지금까지 누적 인증 ${user.cumulativeCount}회, 현재 등급: ${describeCurrentLevel(member, user)}.\n` +
+          `여기까지 꾸준히 잘 오셨어요. 리부트-크루로 승급하면 전자책·워크북을 바로 받아보실 수 있으니, 아직이시라면 한번 살펴보세요.` +
           (PAYMENT_LINK ? `\n더 알아보기 👉 ${PAYMENT_LINK}` : "")
       );
-      markDmSent(member.id, "d30");
+      markDmSent(member.id, "d40");
     }
   }
 }
