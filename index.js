@@ -114,6 +114,14 @@ const HELPER_NOTIFY_COUNT = parseInt(process.env.HELPER_NOTIFY_COUNT || "3", 10)
 const HELPER_ACTIVE_WITHIN_DAYS = parseInt(process.env.HELPER_ACTIVE_WITHIN_DAYS || "3", 10);
 const HELPER_NOTIFY_COOLDOWN_HOURS = parseInt(process.env.HELPER_NOTIFY_COOLDOWN_HOURS || "6", 10);
 
+// ── 신규 멤버 첫 인사 알림 ────────────────────────────────
+// 자기소개/오늘의-기록에 신규 멤버가 첫 글을 남기면, SOS와 같은 헬퍼 풀(최근 활동한
+// 리부트-크루/마스터-크루)에게 "인사해주세요" 알림을 보냅니다. 신규 멤버 환영이
+// 운영자 혼자만의 일이 아니라 커뮤니티 전체의 일이 되도록 하기 위함입니다.
+const SELF_INTRO_CHANNEL_NAME = process.env.SELF_INTRO_CHANNEL_NAME || "자기소개";
+const DAILY_LOG_CHANNEL_NAME = process.env.DAILY_LOG_CHANNEL_NAME || "오늘의-기록";
+const NEWCOMER_WELCOME_CHANNELS = [SELF_INTRO_CHANNEL_NAME, DAILY_LOG_CHANNEL_NAME];
+
 // ── SOS 온콜 에스컬레이션 (사람이 직접 챙기는 안전망) ──────────
 // ONCALL_ROLE_ID/ONCALL_CHANNEL_NAME을 둘 다 채우면, SOS가 올라올 때마다
 // 그 채널에 온콜 역할을 태그해서 알려줍니다. (운영자가 직접 순번을 정해서
@@ -305,6 +313,19 @@ client.on(Events.MessageCreate, async (message) => {
       }
       // SOS 채널은 체크인 집계 대상이 아니므로 여기서 종료
       return;
+    }
+
+    // 신규 멤버 첫 인사 알림: 자기소개/오늘의-기록에 첫 글을 남기면, 최근 활동한
+    // 헬퍼 풀에게 조용히 알림을 보내 누군가 먼저 반겨줄 수 있게 합니다. (멤버당 1회만)
+    if (NEWCOMER_WELCOME_CHANNELS.includes(message.channel.name)) {
+      const introUser = getUser(message.author.id);
+      if (!introUser.newcomerWelcomeNotified) {
+        updateUser(message.author.id, { newcomerWelcomeNotified: true });
+        notifyHelpers(
+          message,
+          `#${message.channel.name}에 새 멤버가 첫 글을 남겼어요. 시간 되실 때 반갑게 인사 한마디 남겨주실 수 있을까요?\n${message.url}`
+        ).catch((e) => console.error("[신규 멤버 환영 알림 오류]", e));
+      }
     }
 
     // 체크인 인정: 채널 구분 없이, 의미 있는 글(2자 이상) 또는 첨부파일이 있으면
@@ -1152,7 +1173,9 @@ async function escalateToOnCall(message) {
 }
 
 // ── 즉시반응 시스템: 최근 활동한 그로우/마스터-크루에게 조용히 알림 ──
-async function notifyHelpers(message) {
+// text를 넘기지 않으면 기존 SOS용 기본 문구를 사용합니다. (신규 멤버 환영 알림 등
+// 다른 상황에서도 같은 헬퍼 풀/쿨다운 로직을 재사용하기 위해 문구를 인자로 뺐습니다.)
+async function notifyHelpers(message, text) {
   const guild = message.guild;
   // 리부트-크루/마스터-크루가 SOS 도움 요청에 응답해줄 수 있는 헬퍼 풀입니다.
   const roleIds = [ROLE_ID_GROW, ROLE_ID_MASTER].filter(Boolean);
@@ -1181,11 +1204,12 @@ async function notifyHelpers(message) {
   const shuffled = [...candidates.values()].sort(() => Math.random() - 0.5);
   const picked = shuffled.slice(0, HELPER_NOTIFY_COUNT);
 
+  const finalText =
+    text ||
+    `지금 #${SOS_CHANNEL_NAME}에 도움이 필요한 분이 있는 것 같아요. 시간 되실 때 한마디 남겨주실 수 있을까요?\n${message.url}`;
+
   for (const member of picked) {
-    await safeDM(
-      member,
-      `지금 #${SOS_CHANNEL_NAME}에 도움이 필요한 분이 있는 것 같아요. 시간 되실 때 한마디 남겨주실 수 있을까요?\n${message.url}`
-    );
+    await safeDM(member, finalText);
     updateUser(member.id, { lastHelperPingAt: now.toISOString() });
   }
 }
