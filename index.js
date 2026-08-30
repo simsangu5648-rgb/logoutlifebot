@@ -27,7 +27,6 @@ const {
   ROLE_ID_REBOOT,
   ROLE_ID_GROW,
   ROLE_ID_MASTER,
-  TRACK_CHANNEL_NAMES,
   THRESHOLD_MASTER,
   PAYMENT_LINK,
   DAILY_CRON,
@@ -42,17 +41,9 @@ for (const [k, v] of Object.entries(REQUIRED)) {
   }
 }
 
-const TRACKED_CHANNELS = (TRACK_CHANNEL_NAMES || "스크린타임-기록,오늘도안봤어요-인증,충동분산-인증")
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean);
-
-// 충동분산-인증 채널은 핀 공지에서 "사진이어도 좋고, 그냥 한 줄 텍스트여도 좋다"고
-// 이미 안내하고 있으므로, 이 채널만 이미지 첨부가 없어도 의미 있는 텍스트가 있으면 인정합니다.
-const TEXT_OK_CHANNELS = (process.env.TEXT_OK_CHANNEL_NAMES || "충동분산-인증")
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean);
+// 체크인 인정 채널을 특정 채널로 한정하지 않고, 서버 어느 채널에 글을 남겨도
+// (하루 1회만 카운트) 누적 인증으로 인정합니다. 최소한의 스팸 방지로 "의미 있는
+// 텍스트(2자 이상)"나 "첨부파일" 둘 중 하나는 있어야 합니다.
 
 // 마스터-크루는 "이미 리부트-크루(전자책 구매 완료)인 사람"이 누적 인증을 더 쌓았을 때 도달하는
 // 최종 등급입니다. (리부트-크루 자체는 더 이상 누적 횟수가 아니라 전자책 구매로만 승급합니다 - 아래 참고)
@@ -142,8 +133,7 @@ const WARNING_RESET_COMMAND = process.env.WARNING_RESET_COMMAND || "!경고초�
 const WARNING_TIMEOUT_HOURS = parseInt(process.env.WARNING_TIMEOUT_HOURS || "24", 10);
 const MOD_LOG_CHANNEL_NAME = process.env.MOD_LOG_CHANNEL_NAME || "신고";
 
-// ── 데일리 스트릭 대시보드 (+ 스트릭 프리즈권) ────────────────
-const STREAK_CHANNEL_NAME = process.env.STREAK_CHANNEL_NAME || "나의-그래프";
+// ── 데일리 스트릭 대시보드 (+ 스트릭 프리즈권) — 봇 DM에서 "!기록"으로 조회 ──
 const STREAK_COMMAND = process.env.STREAK_COMMAND || "!기록";
 // 한 달에 이 횟수만큼은, 하루를 걸러도 연속기록(스트릭)이 끊기지 않습니다.
 const STREAK_FREEZE_PER_MONTH = parseInt(process.env.STREAK_FREEZE_PER_MONTH || "1", 10);
@@ -285,6 +275,8 @@ client.on(Events.MessageCreate, async (message) => {
         await handleReflectionHistoryRequest(message);
       } else if (content === "패턴" || content === "!패턴") {
         await handleSosPatternHistoryRequest(message);
+      } else if (content === "기록" || content === STREAK_COMMAND) {
+        await handleStreakRequest(message);
       } else {
         await handlePendingDmReply(message, content);
       }
@@ -315,33 +307,11 @@ client.on(Events.MessageCreate, async (message) => {
       return;
     }
 
-    // 데일리 스트릭 대시보드: #나의-그래프에서 "!기록" 조회
-    if (message.channel.name === STREAK_CHANNEL_NAME && message.content.trim() === STREAK_COMMAND) {
-      const user = getUser(message.author.id);
-      const monthKey = todayKST().slice(0, 7);
-      const thisMonthCount = (user.monthlyCounts && user.monthlyCounts[monthKey]) || 0;
-      await message.reply(
-        `📊 **${message.author.username}**님의 기록\n` +
-          `누적 인증: ${user.cumulativeCount}회\n` +
-          `현재 등급: ${describeCurrentLevel(message.member, user)}\n` +
-          `${describeNextLevelProgress(message.member, user)}\n` +
-          `현재 연속: ${user.currentStreak || 0}일 🔥\n` +
-          `최고 기록: ${user.longestStreak || 0}일\n` +
-          `이번 달: ${thisMonthCount}회\n` +
-          `🙏 도움 포인트: 이번 주 ${user.weeklyHelperPoints || 0}점 (누적 ${user.totalHelperPoints || 0}점)`
-      );
-      return;
-    }
-
-    if (!TRACKED_CHANNELS.includes(message.channel.name)) return;
-
+    // 체크인 인정: 채널 구분 없이, 의미 있는 글(2자 이상) 또는 첨부파일이 있으면
+    // 서버 어느 채널에 올려도 인정합니다. (하루 1회만 카운트, 아래에서 중복 방지)
     const hasAttachment = message.attachments.size > 0;
     const hasMeaningfulText = message.content.trim().length >= 2; // 이모지 하나 정도는 인정 안 함
-    const channelAllowsTextOnly = TEXT_OK_CHANNELS.includes(message.channel.name);
-
-    // 기본은 이미지 첨부가 있어야 인정. 단, 충동분산-인증처럼 텍스트 인증을 허용한다고
-    // 채널 안내에 명시된 곳은 첨부가 없어도 의미 있는 텍스트면 인정합니다.
-    if (!hasAttachment && !(channelAllowsTextOnly && hasMeaningfulText)) return;
+    if (!hasAttachment && !hasMeaningfulText) return;
 
     const user = getUser(message.author.id);
     const today = todayKST();
@@ -604,6 +574,25 @@ async function handlePendingDmReply(message, content) {
   }
 
   // 어느 쪽에도 해당하지 않는 DM은 조용히 무시합니다 (기존 동작과 동일).
+}
+
+// ── 데일리 스트릭 대시보드 (DM "!기록") ──────────────────────
+async function handleStreakRequest(message) {
+  const user = getUser(message.author.id);
+  const monthKey = todayKST().slice(0, 7);
+  const thisMonthCount = (user.monthlyCounts && user.monthlyCounts[monthKey]) || 0;
+  const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
+  const member = guild ? await guild.members.fetch(message.author.id).catch(() => null) : null;
+  await message.reply(
+    `📊 **${message.author.username}**님의 기록\n` +
+      `누적 인증: ${user.cumulativeCount}회\n` +
+      `현재 등급: ${describeCurrentLevel(member, user)}\n` +
+      `${describeNextLevelProgress(member, user)}\n` +
+      `현재 연속: ${user.currentStreak || 0}일 🔥\n` +
+      `최고 기록: ${user.longestStreak || 0}일\n` +
+      `이번 달: ${thisMonthCount}회\n` +
+      `🙏 도움 포인트: 이번 주 ${user.weeklyHelperPoints || 0}점 (누적 ${user.totalHelperPoints || 0}점)`
+  );
 }
 
 async function handleReflectionHistoryRequest(message) {
