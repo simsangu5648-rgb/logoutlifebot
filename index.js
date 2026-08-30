@@ -148,6 +148,16 @@ const STREAK_FREEZE_PER_MONTH = parseInt(process.env.STREAK_FREEZE_PER_MONTH || 
 
 // ── 멘토 하이라이트 시스템 ─────────────────────────────────
 const HELPER_THANKS_EMOJI = process.env.HELPER_THANKS_EMOJI || "🙏";
+
+// ── 지킴이 배지: 도움 포인트 누적 시 자동 부여 ──────────────────
+// 마스터-크루(자기 자신의 인증 누적)와는 완전히 별개로, 다른 사람을 도운 감사 리액션
+// 누적치(totalHelperPoints, 주간 집계와 달리 절대 초기화되지 않음)가 일정 점수를 넘으면
+// 구매/등급과 무관하게 누구나 "지킴이" 역할을 자동으로 받습니다. 커뮤니티가 운영자 혼자가
+// 아니라 서로 돕는 사람들에 의해 굴러간다는 걸 눈에 보이는 배지로 만들기 위함입니다.
+// ROLE_ID_GUARDIAN을 아직 설정하지 않았다면(예: 역할을 만들었지만 .env/Railway에 반영 전)
+// 조용히 건너뛰고 나머지 기능에는 영향을 주지 않습니다.
+const ROLE_ID_GUARDIAN = process.env.ROLE_ID_GUARDIAN || "";
+const GUARDIAN_THRESHOLD = parseInt(process.env.GUARDIAN_THRESHOLD || "10", 10);
 const HONOR_CHANNEL_NAME = process.env.HONOR_CHANNEL_NAME || "명예의-전당";
 // 커뮤니티 초간소화 개편으로 HONOR_CHANNEL_NAME(명예의-전당)이 삭제된 경우를 대비해,
 // 못 찾으면 항상 존재하는 자유수다로 조용히 폴백합니다 (공개 축하 메시지가 아예
@@ -1246,12 +1256,27 @@ client.on(Events.MessageReactionAdd, async (reaction, reactUser) => {
     // (SOS 헬퍼 알림 대상은 별도 - notifyHelpers에서 그로우/마스터-크루/베테랑으로 그대로 유지됩니다.)
 
     const u = getUser(message.author.id);
+    const updatedTotalHelperPoints = (u.totalHelperPoints || 0) + 1;
     updateUser(message.author.id, {
       weeklyHelperPoints: (u.weeklyHelperPoints || 0) + 1,
-      totalHelperPoints: (u.totalHelperPoints || 0) + 1,
+      totalHelperPoints: updatedTotalHelperPoints,
     });
     // 포인트가 실제로 반영됐다는 걸 바로 눈으로 확인할 수 있도록, 봇이 체크 표시를 남겨요.
     await safeReact(message, "✅");
+
+    // 지킴이 배지: 누적 도움 포인트가 기준을 넘었고 아직 역할이 없으면 자동 부여 (멤버당 1회)
+    if (
+      ROLE_ID_GUARDIAN &&
+      updatedTotalHelperPoints >= GUARDIAN_THRESHOLD &&
+      !authorMember.roles.cache.has(ROLE_ID_GUARDIAN)
+    ) {
+      await authorMember.roles.add(ROLE_ID_GUARDIAN).catch((e) => console.error("[역할부여 실패] 지킴이", e));
+      await safeDM(
+        authorMember,
+        `🛡️ 축하해요! 그동안 다른 분들을 도와주신 게 쌓여서 "지킴이" 역할을 받으셨어요. 로그아웃라이프가 저 혼자가 아니라 지킴이님 같은 분들 덕분에 굴러가고 있어요. 정말 감사해요 🙏`
+      );
+      await announcePromotion(message.guild, authorMember, "지킴이");
+    }
   } catch (e) {
     console.error("[감사 리액션 처리 오류]", e);
   }
