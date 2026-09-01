@@ -84,6 +84,7 @@ const EBOOK_MASTER_PATH = fs.existsSync(EBOOK_DATA_DIR)
   : path.join(__dirname, "ebook_master.local.pdf"); // 볼륨이 없는 로컬 개발 환경용
 const EBOOK_UPLOAD_COMMAND = "!전자책원본업로드";
 const EBOOK_RESET_COMMAND = "!구매초기화";
+const EBOOK_PURCHASE_DELETE_COMMAND = "!구매기록삭제";
 
 // 판매 상품은 전자책 + 30일 워크북 "두 파일" 번들이라(랜딩페이지에도 "전자책과 워크북
 // 두 파일 모두" 라고 명시되어 있음), 워크북도 전자책과 완전히 동일한 방식(원본 별도 업로드 +
@@ -289,6 +290,11 @@ client.on(Events.MessageCreate, async (message) => {
         await handleWorkbookMasterUpload(message);
       } else if (content === EBOOK_RESET_COMMAND) {
         await handleEbookPurchaseReset(message);
+      } else if (
+        content === EBOOK_PURCHASE_DELETE_COMMAND ||
+        content.startsWith(EBOOK_PURCHASE_DELETE_COMMAND + " ")
+      ) {
+        await handleEbookPurchaseDelete(message, content);
       } else if (content === "회고" || content === "!회고") {
         await handleReflectionHistoryRequest(message);
       } else if (content === "패턴" || content === "!패턴") {
@@ -830,6 +836,92 @@ async function handleEbookPurchaseReset(message) {
     console.error("[구매 초기화 오류]", e);
     await message.reply("초기화 중 오류가 발생했어요. 잠시 후 다시 시도해주세요.");
   }
+}
+
+// "!구매기록삭제 @유저" (또는 "!구매기록삭제 유저ID") — 서버 운영자 전용.
+// 환불/중복결제/오류 등의 사유로 특정 멤버의 전자책 구매 상태를 되돌리고,
+// 리부트-크루/마스터-크루 역할을 제거합니다.
+//
+// 주의:
+// - PayApp 등 결제 게이트웨이 쪽 실제 결제 취소/환불은 이 명령어로 처리되지 않아요.
+//   돈이 오간 부분은 PayApp 관리자 페이지에서 별도로 처리해야 합니다.
+// - processedPayments(결제 중복처리 방지 기록)는 mul_no(결제요청번호) 단위로만 저장되어
+//   유저와 직접 연결돼 있지 않아서, 이 명령어로는 건드리지 않습니다. 같은 결제건으로
+//   재구매를 다시 테스트하게 하려면 별도로 알려주세요.
+// - 대상 멤버에게 자동으로 DM을 보내지 않습니다. 알려야 한다면 직접 연락해주세요.
+async function handleEbookPurchaseDelete(message, content) {
+  try {
+    const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
+    if (!guild || guild.ownerId !== message.author.id) {
+      await message.reply("이 명령어는 서버 운영자만 사용할 수 있어요.");
+      return;
+    }
+
+    const targetUser = await resolveEbookDeleteTarget(message, content, guild);
+    if (!targetUser) {
+      await message.reply(
+        `대상 유저를 찾을 수 없어요. "${EBOOK_PURCHASE_DELETE_COMMAND} @유저" 형태로 멘션하거나, ` +
+          `"${EBOOK_PURCHASE_DELETE_COMMAND} 유저ID"처럼 디스코드 유저 ID를 붙여서 다시 보내주세요. ` +
+          `(DM에서는 유저네임 자동완성이 안 될 수 있어서, ID로 보내시는 게 제일 확실해요.)`
+      );
+      return;
+    }
+
+    const targetMember = await guild.members.fetch(targetUser.id).catch(() => null);
+
+    updateUser(targetUser.id, { ebookPurchased: false, ebookPurchasedAt: null });
+
+    const removedRoles = [];
+    if (targetMember) {
+      if (targetMember.roles.cache.has(ROLE_ID_MASTER)) {
+        await targetMember.roles.remove(ROLE_ID_MASTER).catch((e) => console.error("[역할제거 실패] 마스터-크루", e));
+        removedRoles.push("마스터-크루");
+      }
+      if (targetMember.roles.cache.has(ROLE_ID_GROW)) {
+        await targetMember.roles.remove(ROLE_ID_GROW).catch((e) => console.error("[역할제거 실패] 리부트-크루", e));
+        removedRoles.push("리부트-크루");
+      }
+    }
+
+    await message.reply(
+      `✅ ${targetUser.tag || targetUser.username}님의 구매 기록을 삭제했어요.` +
+        `${
+          removedRoles.length
+            ? ` (${removedRoles.join(", ")} 역할 제거됨)`
+            : targetMember
+            ? " (제거할 역할은 없었어요)"
+            : " (서버에서 멤버 정보를 찾지 못해 역할은 건드리지 않았어요)"
+        }\n` +
+        `⚠️ PayApp 등 실제 결제 취소는 이 명령어로 처리되지 않아요. 필요하면 결제 관리자 페이지에서 별도로 처리해주세요. 대상 유저에게는 DM을 보내지 않았어요.`
+    );
+  } catch (e) {
+    console.error("[구매기록 삭제 오류]", e);
+    await message.reply("구매 기록 삭제 중 오류가 발생했어요. 잠시 후 다시 시도해주세요.");
+  }
+}
+
+// "!구매기록삭제" 뒤에 붙은 멘션(@유저) 또는 디스코드 유저 ID로 대상 유저를 찾습니다.
+// DM 안에서는 서버 멤버 멘션 자동완성이 안 될 수 있어서, <@ID>를 직접 타이핑했거나
+// 순수 ID/유저네임을 붙여 보낸 경우까지 함께 지원합니다.
+async function resolveEbookDeleteTarget(message, content, guild) {
+  const mentioned = message.mentions.users.first();
+  if (mentioned) return mentioned;
+
+  const rest = content.slice(EBOOK_PURCHASE_DELETE_COMMAND.length).trim();
+  if (!rest) return null;
+
+  const mentionMatch = rest.match(/^<@!?(\d+)>$/);
+  const rawId = mentionMatch ? mentionMatch[1] : /^\d{15,25}$/.test(rest) ? rest : null;
+  if (rawId) {
+    return await client.users.fetch(rawId).catch(() => null);
+  }
+
+  // 순수 ID/멘션이 아니면, 서버 멤버 중 유저네임이 일치하는 사람을 찾아봅니다.
+  const members = await guild.members.fetch().catch(() => null);
+  if (!members) return null;
+  const needle = rest.replace(/^@/, "").toLowerCase();
+  const found = members.find((m) => m.user.username.toLowerCase() === needle);
+  return found ? found.user : null;
 }
 
 // ── 구매자 전용 워터마크가 삽입된 PDF 생성 (전자책/워크북 공용) ───────
