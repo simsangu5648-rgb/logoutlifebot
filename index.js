@@ -85,6 +85,7 @@ const EBOOK_MASTER_PATH = fs.existsSync(EBOOK_DATA_DIR)
 const EBOOK_UPLOAD_COMMAND = "!전자책원본업로드";
 const EBOOK_RESET_COMMAND = "!구매초기화";
 const EBOOK_PURCHASE_DELETE_COMMAND = "!구매기록삭제";
+const PROMOTION_ANNOUNCE_COMMAND = "!승급축하";
 
 // 판매 상품은 전자책 + 30일 워크북 "두 파일" 번들이라(랜딩페이지에도 "전자책과 워크북
 // 두 파일 모두" 라고 명시되어 있음), 워크북도 전자책과 완전히 동일한 방식(원본 별도 업로드 +
@@ -295,6 +296,11 @@ client.on(Events.MessageCreate, async (message) => {
         content.startsWith(EBOOK_PURCHASE_DELETE_COMMAND + " ")
       ) {
         await handleEbookPurchaseDelete(message, content);
+      } else if (
+        content === PROMOTION_ANNOUNCE_COMMAND ||
+        content.startsWith(PROMOTION_ANNOUNCE_COMMAND + " ")
+      ) {
+        await handlePromotionAnnounce(message, content);
       } else if (content === "회고" || content === "!회고") {
         await handleReflectionHistoryRequest(message);
       } else if (content === "패턴" || content === "!패턴") {
@@ -857,7 +863,7 @@ async function handleEbookPurchaseDelete(message, content) {
       return;
     }
 
-    const targetUser = await resolveEbookDeleteTarget(message, content, guild);
+    const targetUser = await resolveMentionedUser(message, content, EBOOK_PURCHASE_DELETE_COMMAND, guild);
     if (!targetUser) {
       await message.reply(
         `대상 유저를 찾을 수 없어요. "${EBOOK_PURCHASE_DELETE_COMMAND} @유저" 형태로 멘션하거나, ` +
@@ -900,14 +906,14 @@ async function handleEbookPurchaseDelete(message, content) {
   }
 }
 
-// "!구매기록삭제" 뒤에 붙은 멘션(@유저) 또는 디스코드 유저 ID로 대상 유저를 찾습니다.
-// DM 안에서는 서버 멤버 멘션 자동완성이 안 될 수 있어서, <@ID>를 직접 타이핑했거나
-// 순수 ID/유저네임을 붙여 보낸 경우까지 함께 지원합니다.
-async function resolveEbookDeleteTarget(message, content, guild) {
+// 관리자 DM 명령어(!구매기록삭제, !승급축하 등) 뒤에 붙은 멘션(@유저) 또는 디스코드 유저 ID/
+// 유저네임으로 대상 유저를 찾습니다. DM 안에서는 서버 멤버 멘션 자동완성이 안 될 수 있어서,
+// <@ID>를 직접 타이핑했거나 순수 ID/유저네임을 붙여 보낸 경우까지 함께 지원합니다.
+async function resolveMentionedUser(message, content, command, guild) {
   const mentioned = message.mentions.users.first();
   if (mentioned) return mentioned;
 
-  const rest = content.slice(EBOOK_PURCHASE_DELETE_COMMAND.length).trim();
+  const rest = content.slice(command.length).trim();
   if (!rest) return null;
 
   const mentionMatch = rest.match(/^<@!?(\d+)>$/);
@@ -922,6 +928,64 @@ async function resolveEbookDeleteTarget(message, content, guild) {
   const needle = rest.replace(/^@/, "").toLowerCase();
   const found = members.find((m) => m.user.username.toLowerCase() === needle);
   return found ? found.user : null;
+}
+
+// "!승급축하 @유저" (또는 "!승급축하 유저ID") — 서버 운영자 전용.
+// 결제/리액션 등 실제 이벤트를 다시 태우지 않고도, 봇이 평소 승급 때 쓰는 것과 똑같은
+// 형식으로 공개 축하 메시지를 지금 바로 올리게 합니다. (예: 결제는 확인됐는데 이미 예전에
+// 역할을 갖고 있어서 announcePromotion이 자동으로 스킵된 경우, 운영자가 수동으로 역할을
+// 부여한 경우 등)
+//
+// 대상 유저의 등급은 describeCurrentLevel로 자동 판별하고(마스터-크루 > 리부트-크루),
+// 그 유저가 "알림끄기"를 보내 공개 축하를 원치 않는다고 밝힌 상태라면 자동 발행 때와
+// 똑같이 조용히 건너뜁니다 — 관리자 명령어라고 해서 본인 의사를 무시하지 않습니다.
+async function handlePromotionAnnounce(message, content) {
+  try {
+    const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
+    if (!guild || guild.ownerId !== message.author.id) {
+      await message.reply("이 명령어는 서버 운영자만 사용할 수 있어요.");
+      return;
+    }
+
+    const targetUser = await resolveMentionedUser(message, content, PROMOTION_ANNOUNCE_COMMAND, guild);
+    if (!targetUser) {
+      await message.reply(
+        `대상 유저를 찾을 수 없어요. "${PROMOTION_ANNOUNCE_COMMAND} @유저" 형태로 멘션하거나, ` +
+          `"${PROMOTION_ANNOUNCE_COMMAND} 유저ID"처럼 디스코드 유저 ID를 붙여서 다시 보내주세요.`
+      );
+      return;
+    }
+
+    const targetMember = await guild.members.fetch(targetUser.id).catch(() => null);
+    if (!targetMember) {
+      await message.reply("서버에서 그 유저를 찾지 못했어요. 서버에 남아있는 멤버인지 확인해주세요.");
+      return;
+    }
+
+    const u = getUser(targetUser.id);
+    const roleLabel = describeCurrentLevel(targetMember, u);
+    if (roleLabel === "무료멤버") {
+      await message.reply(
+        `${targetUser.tag || targetUser.username}님은 지금 리부트-크루/마스터-크루 역할이 없어서, 축하할 등급이 없어요. 역할을 먼저 부여한 뒤 다시 시도해주세요.`
+      );
+      return;
+    }
+
+    if (u.publicAnnounceOptOut) {
+      await message.reply(
+        `${targetUser.tag || targetUser.username}님은 "알림끄기" 상태라 공개 축하 메시지를 올리지 않았어요. 그래도 올리고 싶으면 먼저 본인에게 알림을 다시 켜달라고 요청해주세요.`
+      );
+      return;
+    }
+
+    await announcePromotion(guild, targetMember, roleLabel);
+    await message.reply(
+      `✅ 공개 채널에 ${targetUser.tag || targetUser.username}님의 ${roleLabel} 승급 축하 메시지를 올렸어요.`
+    );
+  } catch (e) {
+    console.error("[승급 축하 수동 발행 오류]", e);
+    await message.reply("승급 축하 메시지를 올리는 중 오류가 발생했어요. 잠시 후 다시 시도해주세요.");
+  }
 }
 
 // ── 구매자 전용 워터마크가 삽입된 PDF 생성 (전자책/워크북 공용) ───────
