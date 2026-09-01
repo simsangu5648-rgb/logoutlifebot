@@ -978,10 +978,17 @@ async function handlePromotionAnnounce(message, content) {
       return;
     }
 
-    await announcePromotion(guild, targetMember, roleLabel);
-    await message.reply(
-      `✅ 공개 채널에 ${targetUser.tag || targetUser.username}님의 ${roleLabel} 승급 축하 메시지를 올렸어요.`
-    );
+    const posted = await announcePromotion(guild, targetMember, roleLabel);
+    if (posted) {
+      await message.reply(
+        `✅ 공개 채널에 ${targetUser.tag || targetUser.username}님의 ${roleLabel} 승급 축하 메시지를 올렸어요.`
+      );
+    } else {
+      await message.reply(
+        `⚠️ 공개 채널에 메시지를 올리지 못했어요. #명예의-전당(없으면 #자유수다) 채널이 실제로 있는지, ` +
+          `봇이 그 채널에서 "메시지 보내기" 권한이 있는지 확인해주세요. 자세한 오류는 서버 로그에 남아있어요.`
+      );
+    }
   } catch (e) {
     console.error("[승급 축하 수동 발행 오류]", e);
     await message.reply("승급 축하 메시지를 올리는 중 오류가 발생했어요. 잠시 후 다시 시도해주세요.");
@@ -1381,15 +1388,20 @@ async function notifyHelpers(message, text) {
 }
 
 // ── 승급 알림 & 배지 시스템: 공개 채널 축하 메시지 ──────────
+// 반환값(true/false)으로 실제로 메시지를 올렸는지 알려줍니다. 자동 승급 흐름
+// (웹훅/리액션)에서는 이 값을 안 써도 되지만, !승급축하 같은 수동 명령어에서는
+// "실패했는데도 성공했다고 답장하는" 상황을 막기 위해 꼭 필요합니다.
 async function announcePromotion(guild, member, roleLabel) {
   try {
     const u = getUser(member.id);
-    if (u.publicAnnounceOptOut) return;
+    if (u.publicAnnounceOptOut) return false;
     const channel = findAnnounceChannel(guild);
-    if (!channel) return;
+    if (!channel) return false;
     await channel.send(`🎉 **${member.displayName}**님이 ${roleLabel}로 승급했어요! 축하해주세요 👏`);
+    return true;
   } catch (e) {
     console.error("[승급 공개 알림 실패]", e);
+    return false;
   }
 }
 
