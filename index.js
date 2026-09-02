@@ -165,12 +165,21 @@ const HONOR_CHANNEL_NAME = process.env.HONOR_CHANNEL_NAME || "명예의-전당";
 // 못 찾으면 항상 존재하는 자유수다로 조용히 폴백합니다 (공개 축하 메시지가 아예
 // 발송되지 않고 사라지는 것을 막기 위함).
 const HONOR_CHANNEL_FALLBACK_NAME = "자유수다";
+// 채널 이름에 정확히 일치(===)가 아니라 포함(includes) 여부로 찾습니다. 디스코드
+// 채널 이름 앞뒤에 🎉 같은 장식 이모지를 붙이는 건 흔한 일인데, 예전엔 그것만으로도
+// 정확히 일치하지 않아 채널을 못 찾고 조용히(로그도 없이) 실패하는 문제가 있었습니다.
 function findAnnounceChannel(guild) {
-  return (
-    guild.channels.cache.find((c) => c.name === HONOR_CHANNEL_NAME && typeof c.send === "function") ||
-    guild.channels.cache.find((c) => c.name === HONOR_CHANNEL_FALLBACK_NAME && typeof c.send === "function") ||
-    null
-  );
+  const found =
+    guild.channels.cache.find((c) => typeof c.send === "function" && c.name.includes(HONOR_CHANNEL_NAME)) ||
+    guild.channels.cache.find((c) => typeof c.send === "function" && c.name.includes(HONOR_CHANNEL_FALLBACK_NAME)) ||
+    null;
+  if (!found) {
+    console.error(
+      `[승급 공개 알림] 채널을 찾지 못했어요. "${HONOR_CHANNEL_NAME}" 또는 "${HONOR_CHANNEL_FALLBACK_NAME}"을 ` +
+        `포함하는, 메시지를 보낼 수 있는 채널이 서버에 없어요.`
+    );
+  }
+  return found;
 }
 
 // (리부트 버디 그룹 자동 매칭 시스템은 커뮤니티 초간소화 개편 때 삭제되었습니다.
