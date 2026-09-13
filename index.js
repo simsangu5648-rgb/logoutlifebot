@@ -247,6 +247,190 @@ function isoWeekKey(date) {
   return `${d.getUTCFullYear()}-W${String(weekNo).padStart(2, "0")}`;
 }
 
+function addDaysKST(dateStr /* YYYY-MM-DD */, n) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + n);
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "UTC" }).format(dt);
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// ── 30일 리부트 챌린지 (전자책 구매자 대상 데일리 DM 챌린지) ────────────────
+// docs/reboot-challenge-plan.md 기획안 그대로 구현. 기존 기능(구매 플로우 등)에는
+// 영향을 주지 않고, 새 DM 명령어/크론/파싱 분기만 독립적으로 추가합니다.
+// ══════════════════════════════════════════════════════════════════════════
+const REBOOT_START_COMMAND = "!챌린지시작";
+const REBOOT_OPT_OUT_PHRASES = ["챌린지그만", "!챌린지그만"];
+const REBOOT_ANALYSIS_COMMAND = "!챌린지분석";
+const REBOOT_STATUS_COMMAND = "!챌린지현황";
+const REBOOT_PROMPT_CRON = process.env.REBOOT_PROMPT_CRON || "0 20 * * *"; // 매일 20시 발송
+const REBOOT_REMINDER_CRON = process.env.REBOOT_REMINDER_CRON || "0 22 * * *"; // 매일 22시 리마인더
+const REBOOT_MORNING_CRON = process.env.REBOOT_MORNING_CRON || "0 9 * * *"; // D+1 자동시작 + Day7 다이제스트
+const REBOOT_COOLDOWN_DAYS = 3;
+
+// SOS 키워드: Day 0에 적어둔 selfCompassionNote를 즉시 다시 보여주는 사적인 자기 진정 도구.
+// 기존 #충동-sos 채널 시스템(공개 헬퍼 알림)과는 완전히 별개 — 헬퍼 알림/온콜을 트리거하지 않음.
+function isRebootSosKeyword(content) {
+  return /^sos$/i.test((content || "").trim());
+}
+
+// ── 안전 알림: 위기 신호 키워드 (실시간, 분석 주기와 무관하게 항상 작동) ──────
+// 워크북 "위기 대응 프로토콜 6단계 · 도움이 필요한 신호" 체크리스트와 같은 맥락.
+// 띄어쓰기 변형(예: "죽고 싶다" vs "죽고싶다")까지 잡기 위해 공백을 제거한 텍스트로 매칭합니다.
+// ※ 최초 배포용 기본값 — 운영하면서 필요하면 이 배열만 수정하면 됩니다.
+const CRISIS_KEYWORDS_DIRECT = [
+  "자살",
+  "죽고싶",
+  "죽어버리",
+  "자해",
+  "살기싫",
+  "사라지고싶",
+  "없어지고싶",
+  "목숨을끊",
+  "극단적선택",
+  "자해충동",
+];
+const CRISIS_KEYWORDS_INDIRECT = ["위험한생각", "다포기하고싶", "더는못버티", "다끝내고싶", "무너질것같"];
+const CRISIS_HOTLINE_NOTE =
+  "\n\n🧡 혹시 지금 많이 힘드시다면, 정신건강 위기상담전화 1577-0199 (24시간)로 전화해서 이야기 나눠보실 수 있어요.";
+
+function stripSpaces(s) {
+  return (s || "").replace(/\s+/g, "");
+}
+
+function detectCrisisLevel(content) {
+  const stripped = stripSpaces(content);
+  if (CRISIS_KEYWORDS_DIRECT.some((kw) => stripped.includes(kw))) return "direct";
+  if (CRISIS_KEYWORDS_INDIRECT.some((kw) => stripped.includes(kw))) return "indirect";
+  return null;
+}
+
+// 모든 DM 메시지에 대해 항상 호출됩니다 (다른 명령어 처리와 무관, 절대 가로막지 않음).
+// 감지되면 즉시 운영자에게 DM으로 원문을 알리고, true를 반환해서 호출부가 참가자 답장에
+// 위기상담전화 안내를 덧붙일 수 있게 해줍니다.
+async function checkCrisisKeywordsAndNotify(message, content) {
+  try {
+    const level = detectCrisisLevel(content);
+    if (!level) return false;
+    const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
+    const owner = guild ? await guild.members.fetch(guild.ownerId).catch(() => null) : null;
+    const label = level === "direct" ? "🚨 직접 위기 신호" : "⚠️ 간접 위기 신호(맥락 확인 필요)";
+    const text =
+      `${label} 감지 — <@${message.author.id}> (${message.author.tag || message.author.username}, ID: ${message.author.id})\n` +
+      `원문: "${content.slice(0, 500)}"`;
+    if (owner) {
+      await safeDM(owner, text);
+    } else {
+      console.error("[안전 알림] 서버 소유자를 찾지 못해 DM을 보내지 못했습니다.", text);
+    }
+    return true;
+  } catch (e) {
+    console.error("[안전 알림 처리 오류]", e);
+    return false;
+  }
+}
+
+// ── 데이 템플릿 ────────────────────────────────────────────────────────
+function rebootDay0Message() {
+  return (
+    `🛬 REBOOT 구매하신 지 하루 됐네요. 30일 리부트 챌린지를 시작해볼까요?\n` +
+    `매일 저녁 8시에 짧은 질문 하나씩 드리고, 그대로 답장만 해주시면 돼요.\n` +
+    `챌린지가 필요 없으시면 "챌린지그만"이라고 답장해주세요, 더 이상 안 보내드려요.\n\n` +
+    `먼저 딱 하나만 적어주세요 — 무너지는 순간엔 판단력이 떨어져서, 그때 가서 다짐하는 건 소용이 없어요.\n` +
+    `그래서 지금, 평온할 때 딱 한 문장만 미리 적어두는 거예요.\n\n` +
+    `내가 무너졌을 때, 나에게 해줄 말:\n` +
+    `(예: "이건 실패가 아니라 데이터야. 오늘 하루만 다시 시작하면 돼.")\n\n` +
+    `✅ 적어주시면, 나중에 진짜 무너지는 순간이 왔을 때 저한테 "SOS"라고만 보내주세요.\n` +
+    `방금 적어주신 문장을 그 즉시 그대로 다시 보여드릴게요.`
+  );
+}
+
+function rebootDay1to7Message(day) {
+  return (
+    `📋 리부트 챌린지 Day ${day}/7 · 트리거 기록\n` +
+    `오늘 충동/트리거가 있었다면 아래 4가지에 맞춰 적어주세요. 없었다면 "없음"이라고만 보내주세요.\n\n` +
+    `1) 언제인가? (시간대, 요일)\n` +
+    `2) 어디서, 무엇을 하다가인가? (장소, 직전 활동, 기기·앱)\n` +
+    `3) 어떤 감정이었는가? (외로움, 지루함, 스트레스, 분노, 공허함 등)\n` +
+    `4) 강도는 어느 정도였는가? (1~5점, 5가 가장 강함)`
+  );
+}
+
+function rebootDay8Message() {
+  return (
+    `🔧 리부트 챌린지 Day 8 · If-Then 공식 확정\n` +
+    `지난 7일간의 트리거 기록을 바탕으로, 나만의 If-Then 공식을 최대 5개까지 적어주세요.\n` +
+    `(운영자가 Day 7 기록을 분석해서 참고할 내용을 먼저 DM으로 드릴 수도 있어요 — 받으셨다면 참고해서 적어주세요.)\n\n` +
+    `형식: "IF (트리거) ___ THEN ___"\n\n` +
+    `1) IF ___ THEN ___\n2) IF ___ THEN ___\n3) IF ___ THEN ___\n4) IF ___ THEN ___\n5) IF ___ THEN ___\n\n` +
+    `다 못 채우셔도 괜찮아요, 적은 만큼만 보내주세요.`
+  );
+}
+
+function rebootDay9to31Message(day) {
+  const n = day - 8; // 실행 몇일차 (1~23)
+  return (
+    `📈 리부트 챌린지 Day ${day} (실행 ${n}/23일차)\n\n` +
+    `1) 오늘 충동 강도는 어느 정도였나요? (1~5점, 5가 가장 강함)\n` +
+    `2) 확정한 공식을 오늘 썼나요? 썼다면 몇 번, 효과 있었는지 한 줄로.\n` +
+    `3) 오늘 미끄러진(재발) 순간이 있었다면 몇 시쯤·어떤 상황이었는지. 없으면 "없음"만 적어주세요.`
+  );
+}
+
+function rebootPhase(day) {
+  if (day >= 1 && day <= 7) return "diagnosis";
+  if (day >= 9 && day <= 31) return "execution";
+  return "gate"; // 0, 8
+}
+
+function rebootPromptTextForDay(day) {
+  if (day >= 1 && day <= 7) return rebootDay1to7Message(day);
+  if (day >= 9 && day <= 31) return rebootDay9to31Message(day);
+  return null;
+}
+
+// 어제(catchupDay) 기록을 놓쳤을 때, 오늘 것과 같이 볼 수 있게 두 날짜 질문을 한 메시지로 합칩니다.
+// (같은 형식군끼리만 합칩니다 — 진단 구간끼리, 실행 구간끼리. 게이트 날짜와는 합치지 않아요.)
+function buildRebootNightlyPrompt(day, catchupDay) {
+  const main = rebootPromptTextForDay(day);
+  if (catchupDay && rebootPhase(catchupDay) === rebootPhase(day)) {
+    const catchupText = rebootPromptTextForDay(catchupDay);
+    return (
+      `⏳ 어제(Day ${catchupDay}) 기록을 놓치셨네요. 오늘 것과 같이 남겨주셔도 괜찮아요 — 순서대로 편하게 적어주세요.\n\n` +
+      `[Day ${catchupDay}]\n${catchupText}\n\n[Day ${day}]\n${main}`
+    );
+  }
+  return main;
+}
+
+// Day 9~31 답변에서 "재발 없음"인지 대략 판별합니다 (엄격한 파싱은 하지 않는다는 기획 원칙에
+// 따라, 형식이 안 맞아도 재요청 없이 항상 원문을 그대로 저장 — 이건 selfCompassionNote를
+// 다시 보여줄지 판단하기 위한 가벼운 휴리스틱일 뿐입니다).
+function rebootReplyIndicatesRelapse(content) {
+  const trimmed = (content || "").trim();
+  if (/없음\s*$/.test(trimmed)) return false;
+  if (/(재발|미끄러|무너)/.test(trimmed)) return true;
+  return false;
+}
+
+// Day 8 답변에서 "IF ... THEN ..." 형태의 줄을 최대한 뽑아봅니다. 못 뽑아도 원문은
+// 항상 별도로 저장하니 파싱 실패가 데이터 손실로 이어지지 않습니다.
+function parseRebootFormulas(content) {
+  const lines = (content || "").split("\n").map((l) => l.trim()).filter(Boolean);
+  const formulas = lines.filter((l) => /if/i.test(l) && /then/i.test(l));
+  return formulas.length ? formulas.slice(0, 5) : [content.trim()];
+}
+
+async function notifyOwnerText(text) {
+  try {
+    const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
+    const owner = guild ? await guild.members.fetch(guild.ownerId).catch(() => null) : null;
+    if (owner) await safeDM(owner, text);
+  } catch (e) {
+    console.error("[운영자 DM 알림 오류]", e);
+  }
+}
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -269,6 +453,7 @@ client.once(Events.ClientReady, (c) => {
   scheduleWeeklyHighlightJob();
   scheduleWeeklyTipJob();
   scheduleInsightReminderJob();
+  scheduleRebootChallengeJobs();
 });
 
 // (무료멤버 자동 역할 부여는 커뮤니티 초간소화 개편으로 무료 등급 자체가
@@ -282,6 +467,10 @@ client.on(Events.MessageCreate, async (message) => {
     // DM 명령어 처리 (승급 공개 알림 옵트아웃/인 + 전자책 구매 + SOS 트리거/회고 응답)
     if (!message.guild) {
       const content = message.content.trim();
+
+      // 안전 알림: 위기 신호 키워드는 어떤 명령어와 매칭되든 상관없이 항상 감지합니다.
+      await checkCrisisKeywordsAndNotify(message, content).catch((e) => console.error("[안전 알림 오류]", e));
+
       if (content === "알림끄기" || content === "!알림끄기") {
         updateUser(message.author.id, { publicAnnounceOptOut: true });
         await message.reply(
@@ -290,6 +479,8 @@ client.on(Events.MessageCreate, async (message) => {
       } else if (content === "알림켜기" || content === "!알림켜기") {
         updateUser(message.author.id, { publicAnnounceOptOut: false });
         await message.reply("좋아요! 승급하시면 다시 공개 채널에서 축하 메시지를 남길게요 🎉");
+      } else if (isRebootSosKeyword(content)) {
+        await handleRebootSosKeyword(message);
       } else if (EBOOK_PURCHASE_COMMANDS.includes(content)) {
         await handleEbookPurchaseRequest(message);
       } else if (EBOOK_PREVIEW_COMMANDS.includes(content)) {
@@ -310,6 +501,12 @@ client.on(Events.MessageCreate, async (message) => {
         content.startsWith(PROMOTION_ANNOUNCE_COMMAND + " ")
       ) {
         await handlePromotionAnnounce(message, content);
+      } else if (content === REBOOT_ANALYSIS_COMMAND || content.startsWith(REBOOT_ANALYSIS_COMMAND + " ")) {
+        await handleRebootAnalysisCommand(message, content);
+      } else if (content === REBOOT_STATUS_COMMAND || content.startsWith(REBOOT_STATUS_COMMAND + " ")) {
+        await handleRebootStatusCommand(message, content);
+      } else if (content === REBOOT_START_COMMAND) {
+        await handleRebootStartCommand(message);
       } else if (content === "회고" || content === "!회고") {
         await handleReflectionHistoryRequest(message);
       } else if (content === "패턴" || content === "!패턴") {
@@ -426,23 +623,9 @@ client.on(Events.MessageCreate, async (message) => {
 
     // (전자책을 구매하지 않은 "일반멤버"에게 부여되던 4단계 배지 시스템은 삭제되었습니다.
     // 리부트-크루 승급은 전자책 구매로만 이루어집니다.)
-    if (member.roles.cache.has(ROLE_ID_GROW) && !member.roles.cache.has(ROLE_ID_MASTER)) {
-      // 리부트-크루(=전자책 구매 완료)인 사람이 누적 인증을 계속 쌓으면 최종 단계인 마스터-크루로 승급합니다.
-      if (newCount >= T_MASTER) {
-        await member.roles.add(ROLE_ID_MASTER).catch((e) => console.error("[역할부여 실패] 마스터-크루", e));
-        await safeDM(
-          member,
-          `축하해요! 누적 ${newCount}회 기록을 달성해서 마스터-크루로 승급했어요.\n🏆 마스터-크루는 최종 등급이에요. 여기까지 와주셔서 정말 대단해요!`
-        );
-        await announcePromotion(message.guild, member, "마스터-크루");
-      } else {
-        const remaining = T_MASTER - newCount;
-        if (remaining > 0 && remaining <= 3) {
-          // 막바지에는 얼마 안 남았다는 걸 알려주면 동기부여가 되니, 체크인 리액션 후 짧게 살짝 귀띔만 해줍니다.
-          await safeDM(member, `마스터-크루까지 ${remaining}회 남았어요. 조금만 더 힘내요! 💪`);
-        }
-      }
-    }
+    // 마스터-크루 승급 기준 변경: 예전엔 "전자책 구매 후 누적 인증 T_MASTER회"였지만,
+    // 지금은 "30일 리부트 챌린지 최초 완주"로만 승급합니다 (finalizeRebootCompletion 참고).
+    // 이미 마스터-크루인 기존 유저는 소급 적용 없이 그대로 유지됩니다.
   } catch (err) {
     console.error("[messageCreate 처리 오류]", err);
   }
@@ -587,18 +770,40 @@ function describeNextLevelProgress(member, user) {
   }
 
   if (member.roles.cache.has(ROLE_ID_GROW)) {
-    const remaining = Math.max(0, T_MASTER - user.cumulativeCount);
-    if (remaining === 0) return "다음 인증 한 번이면 마스터-크루로 승급해요! 🚀";
-    return `마스터-크루까지 ${remaining}회 남았어요.`;
+    const rc = user.rebootChallenge;
+    if (!rc || !rc.status) {
+      return `전자책 구매 다음 날부터 "30일 리부트 챌린지" DM이 자동으로 시작돼요. 이 챌린지를 완주하면 마스터-크루로 승급해요.`;
+    }
+    if (rc.status === "in_progress" || rc.status === "pending_day0") {
+      return `지금 30일 리부트 챌린지 진행 중이에요 (Day ${rc.currentDay}/31). 완주하면 마스터-크루로 승급해요!`;
+    }
+    if (rc.status === "completed") {
+      return "🏆 30일 리부트 챌린지를 완주해서 마스터-크루가 되셨어요!";
+    }
+    if (rc.status === "failed") {
+      return `리부트 챌린지가 중단됐었어요. ${rc.cooldownUntil ? `${rc.cooldownUntil}부터 ` : ""}"${REBOOT_START_COMMAND}"라고 보내시면 다시 도전할 수 있어요.`;
+    }
+    if (rc.status === "opted_out") {
+      return `리부트 챌린지를 쉬고 계세요. "${REBOOT_START_COMMAND}"라고 보내시면 다시 시작할 수 있어요.`;
+    }
+    return "";
   }
 
-  return `전자책을 구매하면 바로 리부트-크루로 승급돼요 (DM으로 "구매"라고 보내보세요).`;
+  return `전자책을 구매하면 바로 리부트-크루로 승급되고, 다음 날부터 30일 리부트 챌린지가 시작돼요 (DM으로 "구매"라고 보내보세요).`;
 }
 
 // ── SOS 트리거 기록 / 주간 회고: 어떤 명령어에도 안 걸리는 DM은
 // "방금 보낸 질문에 대한 답"일 수 있으니 확인해서 저장합니다 ──────
 async function handlePendingDmReply(message, content) {
   if (!content) return;
+
+  // 30일 리부트 챌린지 체크인 답장이 최우선입니다 (SOS 키워드는 상위 라우터에서 이미 처리됨).
+  const handledByReboot = await handleRebootCheckinReply(message, content).catch((e) => {
+    console.error("[리부트 챌린지 답장 처리 오류]", e);
+    return false;
+  });
+  if (handledByReboot) return;
+
   const user = getUser(message.author.id);
   const now = new Date();
 
@@ -1206,17 +1411,9 @@ async function promoteToGrowCrewByEbook(discordUserId) {
       await announcePromotion(guild, member, "리부트-크루");
     }
 
-    // 구매 이전에 이미 누적 인증이 마스터-크루 기준을 넘어섰던 사람은
-    // 다음 체크인을 기다릴 필요 없이 곧바로 마스터-크루까지 승급시켜줍니다.
-    const u = getUser(discordUserId);
-    if (u.cumulativeCount >= T_MASTER) {
-      await member.roles.add(ROLE_ID_MASTER).catch((e) => console.error("[역할부여 실패] 마스터-크루(구매 즉시)", e));
-      await safeDM(
-        member,
-        `그동안 쌓아온 누적 ${u.cumulativeCount}회 기록 덕분에 마스터-크루로도 바로 승급했어요!`
-      );
-      await announcePromotion(guild, member, "마스터-크루");
-    }
+    // (예전엔 여기서 "구매 이전 누적 인증이 T_MASTER회를 넘으면 즉시 마스터-크루 승급"을
+    // 처리했지만, 마스터-크루 승급 기준이 "30일 리부트 챌린지 최초 완주"로 바뀌면서 삭제했습니다.
+    // 30일 리부트 챌린지는 이 함수가 끝난 뒤 별도로(D+1 자동 시작 스캔) 시작됩니다.)
   } catch (e) {
     console.error("[전자책 승급 처리 오류]", e);
   }
@@ -1723,6 +1920,656 @@ function markDmSent(userId, key) {
   const user = getUser(userId);
   user.dmFlags[key] = true;
   updateUser(userId, { dmFlags: user.dmFlags });
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// ── 30일 리부트 챌린지: 상태 전이 / 다이제스트 / 크론 ────────────────────────
+// ══════════════════════════════════════════════════════════════════════════
+
+const REBOOT_EMOTION_KEYWORDS = ["외로움", "지루함", "스트레스", "분노", "공허함", "불안", "우울", "무기력"];
+const WEEKDAY_LABELS_KO = ["일", "월", "화", "수", "목", "금", "토"];
+
+function weekdayLabelForDate(dateStr) {
+  const d = new Date(`${dateStr}T00:00:00+09:00`);
+  if (Number.isNaN(d.getTime())) return "?";
+  return WEEKDAY_LABELS_KO[d.getDay()];
+}
+
+// 답변 원문에서 1~5점 강도 숫자를 최대한 찾아봅니다. 엄격한 파싱이 아니라 다이제스트용
+// 참고 신호일 뿐이고, 원문은 항상 그대로 함께 보내서 Claude가 직접 읽고 판단하게 합니다.
+function extractIntensity(rawText) {
+  const t = rawText || "";
+  const m = t.match(/([1-5])\s*점/) || t.match(/(?:^|[^0-9])([1-5])(?:[^0-9]|$)/);
+  return m ? Number(m[1]) : null;
+}
+
+function heuristicFormulaUsed(rawText) {
+  const t = rawText || "";
+  if (/(안\s*(씀|썼|사용)|사용\s*안|사용\s*못|0\s*번|안했)/.test(t)) return false;
+  if (/(썼|사용|번)/.test(t)) return true;
+  return null;
+}
+
+function formatEntryLine(day, entries) {
+  const e = entries.find((x) => x.day === day);
+  return `Day${day}: ${e ? e.rawText : "(결번)"}`;
+}
+
+function computeDiagnosisStats(entries) {
+  const diag = entries.filter((e) => e.day >= 1 && e.day <= 7);
+  const recordedDays = diag.length;
+  const triggerDays = diag.filter((e) => !/^없음\s*$/.test((e.rawText || "").trim())).length;
+  const intensities = diag.map((e) => extractIntensity(e.rawText)).filter((n) => n != null);
+  const avgIntensity = intensities.length ? (intensities.reduce((a, b) => a + b, 0) / intensities.length).toFixed(1) : "N/A";
+  const emotionCounts = {};
+  for (const e of diag) {
+    for (const kw of REBOOT_EMOTION_KEYWORDS) {
+      if ((e.rawText || "").includes(kw)) emotionCounts[kw] = (emotionCounts[kw] || 0) + 1;
+    }
+  }
+  const emotionText =
+    Object.entries(emotionCounts)
+      .sort((a, b) => b[1] - a[1])
+      .map(([k, v]) => `${k}(${v})`)
+      .join(", ") || "특이 감정 언급 없음";
+  return { recordedDays, triggerDays, avgIntensity, emotionText };
+}
+
+function computeExecutionStats(entries) {
+  const exec = entries.filter((e) => e.day >= 9 && e.day <= 31).sort((a, b) => a.day - b.day);
+  const recordedDays = exec.length;
+  const intensities = exec.map((e) => extractIntensity(e.rawText)).filter((n) => n != null);
+  const avgIntensity = intensities.length ? (intensities.reduce((a, b) => a + b, 0) / intensities.length).toFixed(1) : "N/A";
+  let trendText = "N/A";
+  if (intensities.length >= 4) {
+    const half = Math.floor(intensities.length / 2);
+    const firstAvg = intensities.slice(0, half).reduce((a, b) => a + b, 0) / half;
+    const secondAvg = intensities.slice(half).reduce((a, b) => a + b, 0) / (intensities.length - half);
+    trendText = `전반부 평균 ${firstAvg.toFixed(1)} → 후반부 평균 ${secondAvg.toFixed(1)}`;
+  }
+  const usedDays = exec.filter((e) => heuristicFormulaUsed(e.rawText) === true);
+  const notUsedDays = exec.filter((e) => heuristicFormulaUsed(e.rawText) === false);
+  const relapseDays = exec.filter((e) => rebootReplyIndicatesRelapse(e.rawText));
+  const relapseWeekdayCounts = {};
+  for (const e of relapseDays) {
+    const label = weekdayLabelForDate(e.date);
+    relapseWeekdayCounts[label] = (relapseWeekdayCounts[label] || 0) + 1;
+  }
+  const relapseWeekdayText =
+    Object.entries(relapseWeekdayCounts)
+      .sort((a, b) => b[1] - a[1])
+      .map(([k, v]) => `${k}(${v})`)
+      .join(", ") || "없음";
+  const relapseRateUsed = usedDays.length
+    ? Math.round((usedDays.filter((e) => rebootReplyIndicatesRelapse(e.rawText)).length / usedDays.length) * 100)
+    : null;
+  const relapseRateNotUsed = notUsedDays.length
+    ? Math.round((notUsedDays.filter((e) => rebootReplyIndicatesRelapse(e.rawText)).length / notUsedDays.length) * 100)
+    : null;
+  return {
+    recordedDays,
+    avgIntensity,
+    trendText,
+    formulaUsedDays: usedDays.length,
+    formulaTotalDays: exec.length,
+    relapseCount: relapseDays.length,
+    relapseWeekdayText,
+    relapseRateUsed,
+    relapseRateNotUsed,
+  };
+}
+
+// 아래 세 함수는 "봇이 계산한 데이터 + 분석 지시문"을 한 메시지로 합쳐서, 운영자가
+// 통째로 복사해 Claude 대화창에 붙여넣기만 하면 되게 만듭니다 (기획서 "분석 흐름" 참고).
+function buildDay7Prompt(discordUserId, label) {
+  const user = getUser(discordUserId);
+  const entries = user.rebootChallenge.entries || [];
+  const stats = computeDiagnosisStats(entries);
+  const lines = [];
+  for (let d = 1; d <= 7; d++) lines.push(formatEntryLine(d, entries));
+  const instruction = `다음은 리부트 챌린지 참가자의 7일간 트리거 진단 기록이야. 아래 형식으로 분석해줘.
+
+1. 이번 주 요약 (3줄 이내, 담백하게)
+2. 반복되는 패턴 (시간대/장소/감정 중 실제로 반복된 것만, 없으면 "뚜렷한 반복 없음")
+3. 다음 주(공식 확정)에 참고할 제안 1~2가지 — 확정할 If-Then 공식 아이디어로 이어지게
+4. 참가자에게 그대로 보낼 격려 메시지 (2~3문장, 과장 없이)
+
+[계산값] 기록 ${stats.recordedDays}/7일 · 트리거 있었던 날 ${stats.triggerDays}일 · 강도 평균 ${stats.avgIntensity} · 감정 빈도: ${stats.emotionText}
+
+[기록]
+${lines.join("\n")}`;
+  return `📥 리부트 챌린지 Day7 분석 요청 — ${label} (ID: ${discordUserId})\n(아래 메시지를 통째로 복사해서 Claude에 붙여넣으세요)\n──────────────────────────\n${instruction}`;
+}
+
+function buildDay31Prompt(discordUserId, label) {
+  const user = getUser(discordUserId);
+  const rc = user.rebootChallenge;
+  const entries = rc.entries || [];
+  const diag = computeDiagnosisStats(entries);
+  const exec = computeExecutionStats(entries);
+  const diagLines = [];
+  for (let d = 1; d <= 7; d++) diagLines.push(formatEntryLine(d, entries));
+  const execLines = [];
+  for (let d = 9; d <= 31; d++) execLines.push(formatEntryLine(d, entries));
+  const formulasText = (rc.formulas || []).map((f, i) => `${i + 1}. ${f}`).join("\n") || "(기록 없음)";
+  const instruction = `다음은 리부트 챌린지 참가자의 31일 전체 기록이야 (진단 7일 + 확정 1일 + 실행 23일). 아래 형식으로 마무리 분석을 써줘.
+
+1. 30일 여정 요약 (5줄 이내)
+2. 시작(진단 주간) 대비 달라진 점 (충동강도, 재발 빈도 등 수치 기반, 과장 없이)
+3. 앞으로를 위한 제안 1~2가지
+4. 참가자에게 그대로 보낼 수료 축하 메시지 (3~4문장, 담백하고 진심 어리게)
+
+[진단 주간 계산값] 기록 ${diag.recordedDays}/7일 · 트리거 있었던 날 ${diag.triggerDays}일 · 강도 평균 ${diag.avgIntensity} · 감정 빈도: ${diag.emotionText}
+[진단 주간 원문]
+${diagLines.join("\n")}
+
+[확정한 If-Then 공식]
+${formulasText}
+
+[실행 구간 계산값] 기록 ${exec.recordedDays}/23일 · 강도 평균 ${exec.avgIntensity} (${exec.trendText}) · 공식 사용 추정 ${exec.formulaUsedDays}/${exec.formulaTotalDays}일 · 재발 총 ${exec.relapseCount}회 · 재발 요일 분포: ${exec.relapseWeekdayText} · 공식 사용일 재발률 ${exec.relapseRateUsed ?? "N/A"}% vs 미사용일 재발률 ${exec.relapseRateNotUsed ?? "N/A"}%
+[실행 구간 원문]
+${execLines.join("\n")}`;
+  return `📥 리부트 챌린지 Day31 최종 분석 요청 — ${label} (ID: ${discordUserId})\n(아래 메시지를 통째로 복사해서 Claude에 붙여넣으세요)\n──────────────────────────\n${instruction}`;
+}
+
+function buildStatusPrompt(discordUserId, label) {
+  const user = getUser(discordUserId);
+  const rc = user.rebootChallenge;
+  const entries = rc.entries || [];
+  const diag = computeDiagnosisStats(entries);
+  const exec = computeExecutionStats(entries);
+  const diagLines = [];
+  for (let d = 1; d <= 7; d++) {
+    if (entries.some((e) => e.day === d)) diagLines.push(formatEntryLine(d, entries));
+  }
+  const execLines = [];
+  for (let d = 9; d <= 31; d++) {
+    if (entries.some((e) => e.day === d)) execLines.push(formatEntryLine(d, entries));
+  }
+  const formulasText = (rc.formulas || []).map((f, i) => `${i + 1}. ${f}`).join("\n") || "(아직 없음)";
+  const instruction = `다음은 리부트 챌린지 참가자의 지금까지(현재 Day ${rc.currentDay}) 중간 기록이야. 정식 분석이 아니라 가벼운 중간 점검이니, 눈에 띄는 패턴만 짧게 짚어줘.
+
+[현재 상태] ${rc.status} · 진행 Day ${rc.currentDay} · 결번 ${(rc.missedDays || []).length}회
+
+[진단 주간 계산값] 기록 ${diag.recordedDays}/7일 · 트리거 있었던 날 ${diag.triggerDays}일 · 강도 평균 ${diag.avgIntensity} · 감정 빈도: ${diag.emotionText}
+[진단 주간 원문]
+${diagLines.join("\n") || "(아직 없음)"}
+
+[확정한 If-Then 공식]
+${formulasText}
+
+[실행 구간 계산값] 기록 ${exec.recordedDays}일 · 강도 평균 ${exec.avgIntensity} (${exec.trendText}) · 공식 사용 추정 ${exec.formulaUsedDays}/${exec.formulaTotalDays}일 · 재발 총 ${exec.relapseCount}회
+[실행 구간 원문]
+${execLines.join("\n") || "(아직 없음)"}`;
+  return `📥 리부트 챌린지 현황 조회 — ${label} (ID: ${discordUserId})\n(아래 메시지를 통째로 복사해서 Claude에 붙여넣으세요)\n──────────────────────────\n${instruction}`;
+}
+
+// ── Day 0 시작 (D+1 자동 발송 또는 !챌린지시작 재도전) ─────────────────────
+async function startRebootChallengeDay0(discordUserId, member, attemptNumber) {
+  const prev = getUser(discordUserId).rebootChallenge;
+  const today = todayKST();
+  updateUser(discordUserId, {
+    rebootChallenge: {
+      active: true,
+      status: "pending_day0",
+      attemptNumber,
+      startDate: today,
+      currentDay: 0,
+      selfCompassionNote: null,
+      awaitingCheckinReply: true,
+      checkinPromptSentAt: new Date().toISOString(),
+      pendingCatchupDay: null,
+      reminderSentToday: false,
+      missedDays: [],
+      formulas: [],
+      entries: [],
+      day7DigestSentAt: null,
+      day31DigestSentAt: null,
+      day6NotifiedAt: null,
+      day29NotifiedAt: null,
+      day7AnalysisSentAt: null,
+      masterCrewGrantedAt: prev.masterCrewGrantedAt || null, // 최초 완주 여부는 재도전해도 유지
+      completedAt: null,
+      failedAt: null,
+      optedOutAt: null,
+      cooldownUntil: null,
+    },
+  });
+  await safeDM(member, rebootDay0Message());
+}
+
+// ── 참가자 명령어: !챌린지시작 (재도전 / 옵트아웃 후 재개용. 최초 시작은 D+1 자동) ──
+async function handleRebootStartCommand(message) {
+  const discordUserId = message.author.id;
+  const user = getUser(discordUserId);
+  if (!user.ebookPurchased) {
+    await message.reply(`이 챌린지는 전자책 구매자 전용이에요. 먼저 "구매"라고 보내서 전자책을 구매해주세요.`);
+    return;
+  }
+  const rc = user.rebootChallenge;
+  const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
+  const member = guild ? await guild.members.fetch(discordUserId).catch(() => null) : null;
+  if (!member) {
+    await message.reply("서버 멤버 정보를 찾을 수 없어요. 서버에 남아있는지 확인해주세요.");
+    return;
+  }
+  if (["pending_day0", "in_progress"].includes(rc.status)) {
+    await message.reply("이미 리부트 챌린지를 진행 중이에요! 매일 저녁 8시에 보내드리는 질문에 답해주세요.");
+    return;
+  }
+  if (rc.status === "failed" && rc.cooldownUntil && todayKST() < rc.cooldownUntil) {
+    await message.reply(`재도전은 ${rc.cooldownUntil}부터 가능해요. 조금만 더 기다려주세요.`);
+    return;
+  }
+  await message.reply("좋아요, 지금부터 리부트 챌린지를 시작할게요! 👇");
+  await startRebootChallengeDay0(discordUserId, member, (rc.attemptNumber || 0) + 1);
+}
+
+// ── SOS 키워드: Day0 자기 문장 즉시 소환 (사적인 도구, 헬퍼 알림 없음) ──────
+async function handleRebootSosKeyword(message) {
+  const user = getUser(message.author.id);
+  const note = user.rebootChallenge && user.rebootChallenge.selfCompassionNote;
+  if (note) {
+    await message.reply(`🛬 적어두신 문장이에요:\n\n"${note}"\n\n지금 이 순간, 이거 하나면 충분해요.`);
+  } else {
+    await message.reply(
+      `아직 적어두신 문장이 없어요. 리부트 챌린지를 시작하면 Day 0에서 그 문장을 적을 수 있어요.\n지금 당장은 — 잠깐 숨 한 번 크게 쉬어보세요. 이 순간은 지나가요.`
+    );
+  }
+  const sosTriggers = [...(user.sosTriggers || []), { date: todayKST(), note: "(SOS 키워드로 자기 문장 소환)" }];
+  updateUser(message.author.id, { sosTriggers });
+}
+
+// ── 완료 처리: 마스터-크루 승급(최초 완주 1회만) + Day31 다이제스트 발송 ────
+async function finalizeRebootCompletion(discordUserId, member) {
+  try {
+    const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
+    const m = member || (guild ? await guild.members.fetch(discordUserId).catch(() => null) : null);
+    const label = m ? m.displayName : discordUserId;
+
+    const rc1 = getUser(discordUserId).rebootChallenge;
+    if (!rc1.masterCrewGrantedAt) {
+      if (m && !m.roles.cache.has(ROLE_ID_MASTER)) {
+        await m.roles.add(ROLE_ID_MASTER).catch((e) => console.error("[역할부여 실패] 마스터-크루(챌린지 완주)", e));
+        await safeDM(m, `🏆 30일 리부트 챌린지 완주로 마스터-크루로 승급했어요! 정말 대단해요.`);
+        if (guild) await announcePromotion(guild, m, "마스터-크루");
+      }
+      const rc2 = getUser(discordUserId).rebootChallenge;
+      updateUser(discordUserId, { rebootChallenge: { ...rc2, masterCrewGrantedAt: new Date().toISOString() } });
+    }
+
+    const rc3 = getUser(discordUserId).rebootChallenge;
+    if (!rc3.day31DigestSentAt) {
+      const prompt = buildDay31Prompt(discordUserId, label);
+      await notifyOwnerText(prompt);
+      const rc4 = getUser(discordUserId).rebootChallenge;
+      updateUser(discordUserId, { rebootChallenge: { ...rc4, day31DigestSentAt: new Date().toISOString() } });
+    }
+  } catch (e) {
+    console.error("[챌린지 완료 처리 오류]", e);
+  }
+}
+
+// ── 참가자 DM 답장 처리 (Day 0/8/1~7/9~31 공통 진입점) ─────────────────────
+// handlePendingDmReply에서 가장 먼저 호출됩니다. true를 반환하면 처리 완료(다른 파싱 생략).
+async function handleRebootCheckinReply(message, content) {
+  const discordUserId = message.author.id;
+  const user = getUser(discordUserId);
+  const rc = user.rebootChallenge;
+  if (!rc || !rc.awaitingCheckinReply) return false;
+
+  if (REBOOT_OPT_OUT_PHRASES.includes(content.trim())) {
+    updateUser(discordUserId, {
+      rebootChallenge: { ...rc, status: "opted_out", active: false, awaitingCheckinReply: false, optedOutAt: new Date().toISOString() },
+    });
+    await message.reply(
+      `알겠어요, 더 이상 리부트 챌린지 메시지를 보내지 않을게요. 나중에 다시 하고 싶으시면 "${REBOOT_START_COMMAND}"라고 보내주세요.`
+    );
+    return true;
+  }
+
+  const day = rc.currentDay;
+  const today = todayKST();
+  const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
+  const member = guild ? await guild.members.fetch(discordUserId).catch(() => null) : null;
+  const crisisDetected = !!detectCrisisLevel(content);
+
+  if (day === 0) {
+    updateUser(discordUserId, {
+      rebootChallenge: { ...rc, selfCompassionNote: content.trim(), status: "in_progress", currentDay: 1, awaitingCheckinReply: false },
+    });
+    await message.reply(`적어주셔서 고마워요. 오늘 저녁 8시부터 매일 짧은 질문을 하나씩 드릴게요.${crisisDetected ? CRISIS_HOTLINE_NOTE : ""}`);
+    return true;
+  }
+
+  if (day === 8) {
+    const formulas = parseRebootFormulas(content);
+    updateUser(discordUserId, {
+      rebootChallenge: { ...rc, formulas, currentDay: 9, awaitingCheckinReply: false },
+    });
+    await message.reply(
+      `공식을 저장했어요! 내일부터 23일간 실제로 이 공식을 써보면서 기록해봐요.${crisisDetected ? CRISIS_HOTLINE_NOTE : ""}`
+    );
+    return true;
+  }
+
+  // 콘텐츠 데이 (1~7, 9~31)
+  const entries = [...(rc.entries || [])];
+  entries.push({ day, date: today, rawText: content.trim(), createdAt: new Date().toISOString() });
+  const coveredDays = [day];
+  let pendingCatchupDay = rc.pendingCatchupDay;
+  if (pendingCatchupDay) {
+    entries.push({
+      day: pendingCatchupDay,
+      date: addDaysKST(today, -1),
+      rawText: `(Day ${day} 답변과 함께 작성됨)\n${content.trim()}`,
+      catchup: true,
+      createdAt: new Date().toISOString(),
+    });
+    coveredDays.push(pendingCatchupDay);
+    pendingCatchupDay = null;
+  }
+
+  const patch = { entries, pendingCatchupDay, awaitingCheckinReply: false };
+  let replyText = "기록해뒀어요. 내일 저녁에 또 봬요!";
+
+  if (day >= 9 && day <= 31 && rebootReplyIndicatesRelapse(content)) {
+    replyText = rc.selfCompassionNote
+      ? `기록해뒀어요.\n\n🛬 적어두신 문장이에요:\n\n"${rc.selfCompassionNote}"\n\n지금 이 순간, 이거 하나면 충분해요.`
+      : "기록해뒀어요. 괜찮아요, 재발은 실패가 아니라 데이터예요.";
+  }
+
+  if (coveredDays.includes(6) && !rc.day6NotifiedAt) {
+    patch.day6NotifiedAt = new Date().toISOString();
+    await notifyOwnerText(
+      `🔔 유저 ${member ? member.displayName : discordUserId}님이 6일차 작성을 완료했습니다.\n(내일 진단 주간이 끝나요 — 모레 아침 9시에 이 분 데이터가 갈 거예요)`
+    );
+  }
+  if (coveredDays.includes(29) && !rc.day29NotifiedAt) {
+    patch.day29NotifiedAt = new Date().toISOString();
+    await notifyOwnerText(
+      `🔔 유저 ${member ? member.displayName : discordUserId}님이 29일차 작성을 완료했습니다.\n(이제 이틀 뒤면 챌린지가 끝나요 — 완료되면 최종 분석 데이터를 보내드릴게요)`
+    );
+  }
+
+  if (day === 7) {
+    patch.currentDay = 8;
+  } else if (day === 31) {
+    patch.currentDay = 32;
+    patch.status = "completed";
+    patch.completedAt = new Date().toISOString();
+    replyText = `🎉 30일 리부트 챌린지를 완주하셨어요! 정말 대단해요.\n최종 분석은 운영자가 확인 후 곧 DM으로 보내드릴게요.`;
+  } else {
+    patch.currentDay = day + 1;
+  }
+
+  if (crisisDetected) replyText += CRISIS_HOTLINE_NOTE;
+
+  updateUser(discordUserId, { rebootChallenge: { ...rc, ...patch } });
+  await message.reply(replyText);
+
+  if (day === 31) {
+    await finalizeRebootCompletion(discordUserId, member);
+  }
+  return true;
+}
+
+// ── 결번/캐치업 처리: 전날 프롬프트에 답이 없었을 때 (매일 저녁 크론에서 호출) ──
+async function handleRebootMissedAndAdvance(discordUserId, member) {
+  const user = getUser(discordUserId);
+  const rc = user.rebootChallenge;
+  if (!rc || rc.status !== "in_progress") return;
+  const overdueDay = rc.currentDay;
+  let missedDays = [...(rc.missedDays || [])];
+  if (rc.pendingCatchupDay && !missedDays.includes(rc.pendingCatchupDay)) {
+    missedDays.push(rc.pendingCatchupDay);
+  }
+  let pendingCatchupDay = overdueDay;
+
+  const fail = async () => {
+    const cooldownUntil = addDaysKST(todayKST(), REBOOT_COOLDOWN_DAYS);
+    updateUser(discordUserId, {
+      rebootChallenge: {
+        ...getUser(discordUserId).rebootChallenge,
+        status: "failed",
+        missedDays,
+        pendingCatchupDay: null,
+        awaitingCheckinReply: false,
+        failedAt: new Date().toISOString(),
+        cooldownUntil,
+      },
+    });
+    await safeDM(
+      member,
+      `😔 리부트 챌린지 — 3일 이상 기록을 남기지 못해 이번 도전은 여기서 마무리할게요.\n` +
+        `괜찮아요, 실패가 아니라 데이터예요. ${cooldownUntil}부터 "${REBOOT_START_COMMAND}"라고 보내시면 처음부터 다시 도전하실 수 있어요.`
+    );
+    await notifyOwnerText(
+      `⚠️ ${member ? member.displayName : discordUserId}님이 리부트 챌린지에 실패했어요 (결번 3회 누적, ${cooldownUntil}부터 재도전 가능).`
+    );
+  };
+
+  if (missedDays.length >= 3) {
+    await fail();
+    return;
+  }
+
+  if (overdueDay === 31) {
+    updateUser(discordUserId, {
+      rebootChallenge: {
+        ...getUser(discordUserId).rebootChallenge,
+        status: "completed",
+        missedDays,
+        pendingCatchupDay: null,
+        awaitingCheckinReply: false,
+        completedAt: new Date().toISOString(),
+      },
+    });
+    await safeDM(
+      member,
+      `30일 리부트 챌린지 기간이 끝났어요. 며칠 결번이 있었지만 여기까지 오신 것만으로도 대단해요. 최종 분석은 운영자가 확인 후 곧 보내드릴게요.`
+    );
+    await finalizeRebootCompletion(discordUserId, member);
+    return;
+  }
+
+  const nextDay = overdueDay === 7 ? 8 : overdueDay + 1;
+  const nextPhase = rebootPhase(nextDay);
+  let gateNote = "";
+
+  // 다음 프롬프트가 형식이 다른 구간(특히 Day8 게이트)이면 캐치업을 더 들고 있을 수 없으니
+  // 여기서 결번으로 확정합니다 (1일 유예는 같은 형식 구간 안에서만 의미가 있어요).
+  if (rebootPhase(pendingCatchupDay) !== nextPhase) {
+    if (!missedDays.includes(pendingCatchupDay)) {
+      missedDays.push(pendingCatchupDay);
+      gateNote = `\n(참고: Day ${pendingCatchupDay} 기록이 없어서 결번 처리했어요)`;
+    }
+    pendingCatchupDay = null;
+    if (missedDays.length >= 3) {
+      await fail();
+      return;
+    }
+  }
+
+  const promptText = nextDay === 8 ? rebootDay8Message() + gateNote : buildRebootNightlyPrompt(nextDay, pendingCatchupDay);
+
+  await safeDM(member, promptText);
+  updateUser(discordUserId, {
+    rebootChallenge: {
+      ...getUser(discordUserId).rebootChallenge,
+      missedDays,
+      pendingCatchupDay,
+      currentDay: nextDay,
+      awaitingCheckinReply: true,
+      checkinPromptSentAt: new Date().toISOString(),
+      reminderSentToday: false,
+    },
+  });
+}
+
+// ── 09시: D+1 자동 시작 스캔 + Day7→8 분석 다이제스트 발송 ─────────────────
+async function runRebootMorningJob() {
+  const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
+  if (!guild) return;
+  const members = await guild.members.fetch();
+  const now = new Date();
+
+  for (const member of members.values()) {
+    if (member.user.bot) continue;
+    const user = getUser(member.id);
+    if (!user.ebookPurchased || !user.ebookPurchasedAt) continue;
+    const rc = user.rebootChallenge;
+
+    if (!rc.status) {
+      const daysSincePurchase = daysBetween(new Date(user.ebookPurchasedAt), now);
+      if (daysSincePurchase >= 1) {
+        await startRebootChallengeDay0(member.id, member, (rc.attemptNumber || 0) + 1).catch((e) =>
+          console.error("[챌린지 자동시작 오류]", e)
+        );
+      }
+      continue;
+    }
+
+    if (rc.status === "in_progress" && rc.currentDay === 8 && !rc.day7DigestSentAt) {
+      const prompt = buildDay7Prompt(member.id, member.displayName);
+      await notifyOwnerText(prompt);
+      const fresh = getUser(member.id).rebootChallenge;
+      updateUser(member.id, { rebootChallenge: { ...fresh, day7DigestSentAt: new Date().toISOString() } });
+    }
+  }
+}
+
+// ── 20시: 매일 프롬프트 발송 (게이트 재알림 / 정상 발송 / 결번 처리) ──────────
+async function runRebootEveningJob() {
+  const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
+  if (!guild) return;
+  const members = await guild.members.fetch();
+
+  for (const member of members.values()) {
+    if (member.user.bot) continue;
+    const user = getUser(member.id);
+    const rc = user.rebootChallenge;
+    if (!rc || !["pending_day0", "in_progress"].includes(rc.status)) continue;
+
+    if (rc.currentDay === 0 || rc.currentDay === 8) {
+      if (rc.awaitingCheckinReply) {
+        const text = rc.currentDay === 0 ? rebootDay0Message() : rebootDay8Message();
+        await safeDM(member, `(다시 안내드려요)\n\n${text}`);
+        const fresh = getUser(member.id).rebootChallenge;
+        updateUser(member.id, { rebootChallenge: { ...fresh, checkinPromptSentAt: new Date().toISOString(), reminderSentToday: false } });
+      }
+      continue;
+    }
+
+    if (!rc.awaitingCheckinReply) {
+      const text = buildRebootNightlyPrompt(rc.currentDay, rc.pendingCatchupDay);
+      await safeDM(member, text);
+      const fresh = getUser(member.id).rebootChallenge;
+      updateUser(member.id, {
+        rebootChallenge: { ...fresh, awaitingCheckinReply: true, checkinPromptSentAt: new Date().toISOString(), reminderSentToday: false },
+      });
+    } else {
+      await handleRebootMissedAndAdvance(member.id, member).catch((e) => console.error("[챌린지 결번처리 오류]", e));
+    }
+  }
+}
+
+// ── 22시: 오늘 프롬프트에 아직 답 안 한 사람에게 리마인더 1회 ────────────────
+async function runRebootReminderJob() {
+  const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
+  if (!guild) return;
+  const members = await guild.members.fetch();
+  const today = todayKST();
+
+  for (const member of members.values()) {
+    if (member.user.bot) continue;
+    const user = getUser(member.id);
+    const rc = user.rebootChallenge;
+    if (!rc || !["pending_day0", "in_progress"].includes(rc.status)) continue;
+    if (!rc.awaitingCheckinReply || rc.reminderSentToday || !rc.checkinPromptSentAt) continue;
+    const sentDate = new Intl.DateTimeFormat("en-CA", { timeZone: TZ }).format(new Date(rc.checkinPromptSentAt));
+    if (sentDate !== today) continue;
+    await safeDM(member, "⏰ 아직 오늘 리부트 챌린지 기록을 안 하셨어요. 2분이면 끝나요 — 위 형식대로 답장 주세요.");
+    const fresh = getUser(member.id).rebootChallenge;
+    updateUser(member.id, { rebootChallenge: { ...fresh, reminderSentToday: true } });
+  }
+}
+
+function scheduleRebootChallengeJobs() {
+  cron.schedule(REBOOT_MORNING_CRON, () => runRebootMorningJob().catch((e) => console.error("[리부트챌린지 아침 작업 오류]", e)), {
+    timezone: TZ,
+  });
+  cron.schedule(REBOOT_PROMPT_CRON, () => runRebootEveningJob().catch((e) => console.error("[리부트챌린지 저녁 발송 오류]", e)), {
+    timezone: TZ,
+  });
+  cron.schedule(REBOOT_REMINDER_CRON, () => runRebootReminderJob().catch((e) => console.error("[리부트챌린지 리마인더 오류]", e)), {
+    timezone: TZ,
+  });
+  console.log(
+    `[예약 등록] 리부트 챌린지 cron: 아침 "${REBOOT_MORNING_CRON}" / 저녁 "${REBOOT_PROMPT_CRON}" / 리마인더 "${REBOOT_REMINDER_CRON}" (${TZ})`
+  );
+}
+
+// ── 운영자 명령어: !챌린지분석 @유저 <내용> (참가자에게 최종 분석 전달) ──────
+async function handleRebootAnalysisCommand(message, content) {
+  try {
+    const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
+    if (!guild || guild.ownerId !== message.author.id) {
+      await message.reply("이 명령어는 서버 운영자만 사용할 수 있어요.");
+      return;
+    }
+    const mentioned = message.mentions.users.first();
+    let rest = content.slice(REBOOT_ANALYSIS_COMMAND.length).trim();
+    let targetUser = mentioned;
+    if (mentioned) {
+      rest = rest.replace(/^<@!?\d+>\s*/, "").trim();
+    } else {
+      const idMatch = rest.match(/^(\d{15,25})\s*/);
+      if (idMatch) {
+        targetUser = await client.users.fetch(idMatch[1]).catch(() => null);
+        rest = rest.slice(idMatch[0].length).trim();
+      }
+    }
+    if (!targetUser || !rest) {
+      await message.reply(`사용법: ${REBOOT_ANALYSIS_COMMAND} @유저 <참가자에게 보낼 분석 내용>`);
+      return;
+    }
+    const targetMember = await guild.members.fetch(targetUser.id).catch(() => null);
+    if (!targetMember) {
+      await message.reply("서버에서 그 유저를 찾지 못했어요.");
+      return;
+    }
+    await safeDM(targetMember, `📊 리부트 챌린지 분석 결과예요\n\n${rest}`);
+    const u = getUser(targetUser.id);
+    updateUser(targetUser.id, { rebootChallenge: { ...u.rebootChallenge, day7AnalysisSentAt: new Date().toISOString() } });
+    await message.reply(`✅ ${targetMember.displayName}님에게 분석 내용을 전달했어요.`);
+  } catch (e) {
+    console.error("[챌린지 분석 전달 오류]", e);
+    await message.reply("분석 내용을 전달하는 중 오류가 발생했어요.");
+  }
+}
+
+// ── 운영자 명령어: !챌린지현황 @유저 (언제든 즉시 복붙용 프롬프트로 조회) ────
+async function handleRebootStatusCommand(message, content) {
+  try {
+    const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
+    if (!guild || guild.ownerId !== message.author.id) {
+      await message.reply("이 명령어는 서버 운영자만 사용할 수 있어요.");
+      return;
+    }
+    const targetUser = await resolveMentionedUser(message, content, REBOOT_STATUS_COMMAND, guild);
+    if (!targetUser) {
+      await message.reply(`사용법: ${REBOOT_STATUS_COMMAND} @유저 (또는 유저ID)`);
+      return;
+    }
+    const targetMember = await guild.members.fetch(targetUser.id).catch(() => null);
+    const label = targetMember ? targetMember.displayName : targetUser.tag || targetUser.username;
+    const prompt = buildStatusPrompt(targetUser.id, label);
+    await message.reply(prompt);
+  } catch (e) {
+    console.error("[챌린지 현황 조회 오류]", e);
+    await message.reply("현황 조회 중 오류가 발생했어요.");
+  }
 }
 
 // ── 공용 유틸: 실패해도 봇이 죽지 않게 감싸기 ──────────────────
