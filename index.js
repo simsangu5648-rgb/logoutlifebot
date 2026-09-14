@@ -952,9 +952,9 @@ async function handleEbookPreviewRequest(message) {
   try {
     await message.reply(
       `📖 **${EBOOK_NAME}** 무료 미리보기(프롤로그 + 1장 전체)는 아래 신청서 작성 후 바로 받으실 수 있어요!\n\n` +
-      `1️⃣ 아래 링크 눌러서 30초짜리 신청서 작성\n\n` +
-      `2️⃣ 이메일 남기고 안내 문구 확인 후 동의 체크\n\n` +
-      `3️⃣ 제출하자마자 그 자리에서 바로 PDF 다운로드 링크가 떠요\n\n` +
+      `1️. 아래 링크 눌러서 30초짜리 신청서 작성\n\n` +
+      `2️. 이메일 남기고 안내 문구 확인 후 동의 체크\n\n` +
+      `3️. 제출하자마자 그 자리에서 바로 PDF 다운로드 링크가 떠요\n\n` +
       `👉 ${EBOOK_PREVIEW_FORM_URL}\n\n` +
       `(#공지-규칙 채널에도 같은 안내가 있어요)\n\n` +
       `전체 내용이 마음에 드시면 "${EBOOK_PURCHASE_COMMANDS[0]}"라고 보내주세요 🙂`
