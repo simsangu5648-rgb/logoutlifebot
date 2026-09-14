@@ -945,21 +945,23 @@ async function handleEbookPurchaseRequest(message) {
     await message.reply("결제 링크 생성 중 오류가 발생했어요. 잠시 후 다시 시도해주세요.");
   }
 }
+// 무료 미리보기는 더 이상 파일을 DM으로 직접 보내지 않고, 구글폼(이메일 수집) 신청 페이지로 안내합니다.
+// 신청서 제출 후 확인 화면에서 /preview-download 로 바로 연결되어 PDF를 받을 수 있어요.
+const EBOOK_PREVIEW_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSeomkOO4-DNSXHDXR57csP2IDgNhGgYUHgJx12rMk815j06-Q/viewform";
 async function handleEbookPreviewRequest(message) {
   try {
-    if (!fs.existsSync(EBOOK_PREVIEW_PATH)) {
-      await message.reply("미리보기 파일을 찾을 수 없어요. 운영자에게 문의해주세요.");
-      console.error("[전자책 미리보기 오류] 파일 없음:", EBOOK_PREVIEW_PATH);
-      return;
-    }
-    const attachment = new AttachmentBuilder(EBOOK_PREVIEW_PATH, { name: "로그아웃라이프_REBOOT_미리보기.pdf" });
-    await message.reply({
-      content: `📖 **${EBOOK_NAME}** 무료 미리보기예요! (프롤로그 + 1장 전체 수록)\n전체 내용이 마음에 드시면 "${EBOOK_PURCHASE_COMMANDS[0]}"라고 보내주세요 🙂`,
-      files: [attachment],
-    });
+    await message.reply(
+      `📖 **${EBOOK_NAME}** 무료 미리보기(프롤로그 + 1장 전체)는 아래 신청서 작성 후 바로 받으실 수 있어요!\n\n` +
+      `1️⃣ 아래 링크 눌러서 30초짜리 신청서 작성\n` +
+      `2️⃣ 이메일 남기고 안내 문구 확인 후 동의 체크\n` +
+      `3️⃣ 제출하자마자 그 자리에서 바로 PDF 다운로드 링크가 떠요\n\n` +
+      `👉 ${EBOOK_PREVIEW_FORM_URL}\n\n` +
+      `(#공지-규칙 채널에도 같은 안내가 있어요)\n\n` +
+      `전체 내용이 마음에 드시면 "${EBOOK_PURCHASE_COMMANDS[0]}"라고 보내주세요 🙂`
+    );
   } catch (e) {
-    console.error("[전자책 미리보기 전송 오류]", e);
-    await message.reply("미리보기 전송 중 오류가 발생했어요. 잠시 후 다시 시도해주세요.");
+    console.error("[전자책 미리보기 안내 전송 오류]", e);
+    await message.reply("미리보기 안내 전송 중 오류가 발생했어요. 잠시 후 다시 시도해주세요.");
   }
 }
 
