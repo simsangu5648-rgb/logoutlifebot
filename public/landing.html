@@ -189,7 +189,8 @@ h2.h-serif{ font-family:"Noto Serif CJK KR",serif; font-weight:900; font-size:cl
 .bp-scene + .bp-scene{ border-top:1px dashed var(--wire); }
 .bp-scene-tag{ display:inline-block; font-size:10.5px; font-weight:800; letter-spacing:1.2px; text-transform:uppercase; color:var(--warm); background:rgba(193,122,82,0.12); border:1px solid rgba(193,122,82,0.3); padding:4px 11px; border-radius:20px; margin-bottom:16px; }
 .bp-msg{ display:flex; gap:12px; margin-bottom:18px; }
-.bp-avatar{ flex:none; width:34px; height:34px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:15px; }
+.bp-avatar{ flex:none; width:34px; height:34px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:15px; overflow:hidden; }
+.bp-avatar img{ width:100%; height:100%; object-fit:cover; display:block; }
 .bp-msg.bot .bp-avatar{ background:linear-gradient(160deg,var(--sys),#5f8a2a); }
 .bp-msg.user .bp-avatar{ background:#3a3c46; }
 .bp-msg-body{ min-width:0; }
@@ -207,8 +208,9 @@ h2.h-serif{ font-family:"Noto Serif CJK KR",serif; font-weight:900; font-size:cl
 .pv-steps{ display:grid; grid-template-columns:repeat(3,1fr); gap:18px; margin-top:40px; }
 .pv-steps .step h4{ color:#f0efe4; }
 @media (max-width:820px){ .pv-steps{ grid-template-columns:1fr; } }
-.pv-cta-row{ margin-top:38px; display:flex; align-items:center; gap:18px; flex-wrap:wrap; }
-.pv-note{ font-size:12.5px; color:#6b6550; }
+.pv-cta-row{ margin-top:38px; display:flex; flex-direction:column; align-items:center; gap:14px; text-align:center; }
+.pv-cta-row .discord-btn{ display:inline-flex; align-items:center; justify-content:center; width:auto; max-width:100%; line-height:1.4; white-space:normal; }
+.pv-note{ font-size:12.5px; color:#6b6550; max-width:420px; }
 
 .faq-item{ border-bottom:1px solid #e6e0cf; }
 .faq-q{ display:flex; justify-content:space-between; align-items:center; padding:20px 4px; cursor:pointer; font-weight:700; font-size:15px; }
@@ -465,6 +467,123 @@ h2.h-serif{ font-family:"Noto Serif CJK KR",serif; font-weight:900; font-size:cl
   </div>
 </section>
 
+<!-- ============ FREE PREVIEW (결제 전, 무료 미리보기) ============ -->
+<section class="section paper">
+  <div class="wrap">
+    <div class="eyebrow on-paper warm reveal">결제 전에, 이것부터</div>
+    <h2 class="h-serif reveal" style="margin-top:14px;max-width:560px;">프롤로그 + 1장, 신청하면 바로 받아요</h2>
+    <p class="reveal" style="margin-top:14px;max-width:600px;font-size:14.5px;line-height:1.9;color:#4a4534;">지갑을 열기 전에 직접 읽어보고 판단하셨으면 좋겠어요. 결제 없이, 신청서 작성 30초면 그 자리에서 바로 받을 수 있습니다.</p>
+
+    <div class="pv-steps">
+      <div class="step reveal"><div class="snum">01</div><h4>디스코드 무료 참여</h4><p>가입만 하면 바로 서버 안 모든 채널을 볼 수 있어요. 결제 정보도, 이메일도 필요 없어요.</p></div>
+      <div class="step reveal"><div class="snum">02</div><h4>봇에게 DM으로 "미리보기"</h4><p>로그아웃라이프봇 프로필을 클릭해서 DM 보내기 → "미리보기"라고 딱 한 단어만 보내주세요. (#공지-규칙 채널에도 똑같이 안내돼 있어요.)</p></div>
+      <div class="step reveal"><div class="snum">03</div><h4>간단한 30초, 정보 남기고 PDF 다운로드</h4><p>봇이 안내하는 신청서에 이메일만 남기면, 제출한 그 자리에서 바로 REBOOT 프롤로그 + 1장 PDF 다운로드 링크가 떠요.</p></div>
+    </div>
+
+    <div class="pv-cta-row reveal">
+      <a href="https://discord.gg/Ajh6mFBCTP" target="_blank" rel="noopener" class="discord-btn">디스코드에서 무료 미리보기 받기 →</a>
+      <span class="pv-note">전체가 마음에 드시면, 그 자리에서 바로 정식판 구매로 이어갈 수 있어요.</span>
+    </div>
+  </div>
+</section>
+
+<!-- ============ BOT MESSAGE PREVIEW (실제 봇 문구 그대로) ============ -->
+<section class="section void">
+  <div class="wrap" style="text-align:center;">
+    <div class="eyebrow sys reveal">말로 설명하는 대신, 그대로 보여드릴게요</div>
+    <h2 class="h-serif reveal" style="margin:14px auto 0;max-width:600px;">봇이 실제로 보내는 문구,<br>딱 그대로입니다</h2>
+    <p class="bp-note reveal" style="margin-left:auto;margin-right:auto;">아래 로그아웃라이프봇의 말풍선은 전부 실제 코드에 그대로 들어있는 문구입니다. 과장하거나 다듬지 않았어요. 참가자 쪽 답장은 이해를 돕기 위한 예시 상황이고, 실제 특정 개인의 대화를 옮긴 것은 아닙니다.</p>
+
+    <div class="bp-frame reveal">
+      <div class="bp-titlebar">
+        <div class="dots"><span></span><span></span><span></span></div>
+        <div class="who">DM · <b>로그아웃라이프봇</b></div>
+      </div>
+
+      <div class="bp-scene">
+        <span class="bp-scene-tag">Day 0 · 챌린지 시작</span>
+        <div class="bp-msg bot">
+          <div class="bp-avatar"><img src="data:image/png;base64,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" alt="로그아웃라이프봇"></div>
+          <div class="bp-msg-body">
+            <div class="bp-msg-head"><span class="bp-msg-name">로그아웃라이프봇</span><span class="bp-msg-time">오후 9:03</span></div>
+            <div class="bp-msg-text">🛬 REBOOT 구매하신 지 하루 됐네요. 30일 리부트 챌린지를 시작해볼까요?
+매일 저녁 8시에 짧은 질문 하나씩 드리고, 그대로 답장만 해주시면 돼요.
+
+먼저 딱 하나만 적어주세요 — 무너지는 순간엔 판단력이 떨어져서, 그때 가서 다짐하는 건 소용이 없어요.
+
+<b>내가 무너졌을 때, 나에게 해줄 말:</b>
+(예: "이건 실패가 아니라 데이터야. 오늘 하루만 다시 시작하면 돼.")
+
+✅ 적어주시면, 나중에 진짜 무너지는 순간이 왔을 때 저한테 "SOS"라고만 보내주세요. 방금 적어주신 문장을 그 즉시 그대로 다시 보여드릴게요.</div>
+          </div>
+        </div>
+        <div class="bp-msg user">
+          <div class="bp-avatar">🙂</div>
+          <div class="bp-msg-body">
+            <div class="bp-msg-head"><span class="bp-msg-name">참가자 (예시)</span><span class="bp-msg-time">오후 9:07</span></div>
+            <div class="bp-msg-text">이건 실패가 아니라 데이터야. 오늘 하루만 다시 시작하면 돼.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="bp-scene">
+        <span class="bp-scene-tag">며칠 뒤, 무너진 밤</span>
+        <div class="bp-msg user">
+          <div class="bp-avatar">🙂</div>
+          <div class="bp-msg-body">
+            <div class="bp-msg-head"><span class="bp-msg-name">참가자 (예시)</span><span class="bp-msg-time">오후 11:42</span></div>
+            <div class="bp-msg-text">오늘 결국 또 봤어요. 스스로한테 너무 실망스러워요.</div>
+          </div>
+        </div>
+        <div class="bp-msg bot">
+          <div class="bp-avatar"><img src="data:image/png;base64,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" alt="로그아웃라이프봇"></div>
+          <div class="bp-msg-body">
+            <div class="bp-msg-head"><span class="bp-msg-name">로그아웃라이프봇</span><span class="bp-msg-time">오후 11:42</span></div>
+            <div class="bp-msg-text">기록해뒀어요.
+
+🛬 적어두신 문장이에요:</div>
+            <div class="bp-msg-quote">"이건 실패가 아니라 데이터야. 오늘 하루만 다시 시작하면 돼."</div>
+            <div class="bp-msg-text" style="margin-top:8px;">지금 이 순간, 이거 하나면 충분해요.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="bp-scene">
+        <span class="bp-scene-tag">#충동-sos · 즉시반응</span>
+        <div class="bp-msg user">
+          <div class="bp-avatar">🙂</div>
+          <div class="bp-msg-body">
+            <div class="bp-msg-head"><span class="bp-msg-name">참가자 (예시) · #충동-sos</span><span class="bp-msg-time">오전 1:15</span></div>
+            <div class="bp-msg-text">지금 너무 힘들어요</div>
+          </div>
+        </div>
+        <div class="bp-msg bot">
+          <div class="bp-avatar"><img src="data:image/png;base64,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" alt="로그아웃라이프봇"></div>
+          <div class="bp-msg-body">
+            <div class="bp-msg-head"><span class="bp-msg-name">로그아웃라이프봇</span><span class="bp-msg-time">오전 1:15</span></div>
+            <div class="bp-msg-text">🫂 (글에 즉시 리액션)</div>
+            <div class="bp-msg-text" style="margin-top:8px;">괜찮으세요? 혹시 방금 어떤 상황/기분이었는지 한 줄로 남겨주실 수 있어요? 나중에 스스로 패턴을 돌아보는 데 쓰일 거예요. (완전 선택이에요, 그냥 넘어가셔도 괜찮아요 🙂)</div>
+          </div>
+        </div>
+        <div class="bp-illust">↳ 이와 동시에, 최근 활동한 리부트-크루 멤버 몇 명에게도 "도와주실 수 있을까요" 알림이 조용히 갑니다.</div>
+      </div>
+
+      <div class="bp-scene">
+        <span class="bp-scene-tag">Day 31 · 완주</span>
+        <div class="bp-msg bot">
+          <div class="bp-avatar"><img src="data:image/png;base64,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" alt="로그아웃라이프봇"></div>
+          <div class="bp-msg-body">
+            <div class="bp-msg-head"><span class="bp-msg-name">로그아웃라이프봇</span><span class="bp-msg-time">오후 8:31</span></div>
+            <div class="bp-msg-text">🎉 30일 리부트 챌린지를 완주하셨어요! 정말 대단해요.
+최종 분석은 운영자가 확인 후 곧 DM으로 보내드릴게요.</div>
+            <div class="bp-msg-text" style="margin-top:10px;">🏆 30일 리부트 챌린지 완주로 마스터-크루로 승급했어요! 정말 대단해요.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
 <!-- ============ DISCORD COMMUNITY ============ -->
 <section class="section paper">
   <div class="wrap">
@@ -503,123 +622,6 @@ h2.h-serif{ font-family:"Noto Serif CJK KR",serif; font-weight:900; font-size:cl
       <p>LOGOUTLIFE 디스코드는 이미 열려 있고, 누구나 무료로 바로 참여할 수 있습니다. REBOOT를 구매하면 리부트-크루로 승급되고, 전자책·워크북 파일을 바로 받아보실 수 있어요. 구매자 전용 #함께-만들기 채널에서 새 아이디어나 초안에 가장 먼저 의견을 남길 수 있고, SOS 요청이 올라오면 도움을 요청받는 헬퍼 알림 대상에도 포함돼요.</p>
       <a href="https://discord.gg/Ajh6mFBCTP" target="_blank" rel="noopener" class="discord-btn">디스코드 무료로 참여하기 →</a>
       <div class="discord-note">결제 없이도 지금 바로 참여할 수 있어요.</div>
-    </div>
-  </div>
-</section>
-
-<!-- ============ BOT MESSAGE PREVIEW (실제 봇 문구 그대로) ============ -->
-<section class="section void">
-  <div class="wrap" style="text-align:center;">
-    <div class="eyebrow sys reveal">말로 설명하는 대신, 그대로 보여드릴게요</div>
-    <h2 class="h-serif reveal" style="margin:14px auto 0;max-width:600px;">봇이 실제로 보내는 문구,<br>딱 그대로입니다</h2>
-    <p class="bp-note reveal" style="margin-left:auto;margin-right:auto;">아래 로그아웃라이프봇의 말풍선은 전부 실제 코드에 그대로 들어있는 문구입니다. 과장하거나 다듬지 않았어요. 참가자 쪽 답장은 이해를 돕기 위한 예시 상황이고, 실제 특정 개인의 대화를 옮긴 것은 아닙니다.</p>
-
-    <div class="bp-frame reveal">
-      <div class="bp-titlebar">
-        <div class="dots"><span></span><span></span><span></span></div>
-        <div class="who">DM · <b>로그아웃라이프봇</b></div>
-      </div>
-
-      <div class="bp-scene">
-        <span class="bp-scene-tag">Day 0 · 챌린지 시작</span>
-        <div class="bp-msg bot">
-          <div class="bp-avatar">🌙</div>
-          <div class="bp-msg-body">
-            <div class="bp-msg-head"><span class="bp-msg-name">로그아웃라이프봇</span><span class="bp-msg-time">오후 9:03</span></div>
-            <div class="bp-msg-text">🛬 REBOOT 구매하신 지 하루 됐네요. 30일 리부트 챌린지를 시작해볼까요?
-매일 저녁 8시에 짧은 질문 하나씩 드리고, 그대로 답장만 해주시면 돼요.
-
-먼저 딱 하나만 적어주세요 — 무너지는 순간엔 판단력이 떨어져서, 그때 가서 다짐하는 건 소용이 없어요.
-
-<b>내가 무너졌을 때, 나에게 해줄 말:</b>
-(예: "이건 실패가 아니라 데이터야. 오늘 하루만 다시 시작하면 돼.")
-
-✅ 적어주시면, 나중에 진짜 무너지는 순간이 왔을 때 저한테 "SOS"라고만 보내주세요. 방금 적어주신 문장을 그 즉시 그대로 다시 보여드릴게요.</div>
-          </div>
-        </div>
-        <div class="bp-msg user">
-          <div class="bp-avatar">🙂</div>
-          <div class="bp-msg-body">
-            <div class="bp-msg-head"><span class="bp-msg-name">참가자 (예시)</span><span class="bp-msg-time">오후 9:07</span></div>
-            <div class="bp-msg-text">이건 실패가 아니라 데이터야. 오늘 하루만 다시 시작하면 돼.</div>
-          </div>
-        </div>
-      </div>
-
-      <div class="bp-scene">
-        <span class="bp-scene-tag">며칠 뒤, 무너진 밤</span>
-        <div class="bp-msg user">
-          <div class="bp-avatar">🙂</div>
-          <div class="bp-msg-body">
-            <div class="bp-msg-head"><span class="bp-msg-name">참가자 (예시)</span><span class="bp-msg-time">오후 11:42</span></div>
-            <div class="bp-msg-text">오늘 결국 또 봤어요. 스스로한테 너무 실망스러워요.</div>
-          </div>
-        </div>
-        <div class="bp-msg bot">
-          <div class="bp-avatar">🌙</div>
-          <div class="bp-msg-body">
-            <div class="bp-msg-head"><span class="bp-msg-name">로그아웃라이프봇</span><span class="bp-msg-time">오후 11:42</span></div>
-            <div class="bp-msg-text">기록해뒀어요.
-
-🛬 적어두신 문장이에요:</div>
-            <div class="bp-msg-quote">"이건 실패가 아니라 데이터야. 오늘 하루만 다시 시작하면 돼."</div>
-            <div class="bp-msg-text" style="margin-top:8px;">지금 이 순간, 이거 하나면 충분해요.</div>
-          </div>
-        </div>
-      </div>
-
-      <div class="bp-scene">
-        <span class="bp-scene-tag">#충동-sos · 즉시반응</span>
-        <div class="bp-msg user">
-          <div class="bp-avatar">🙂</div>
-          <div class="bp-msg-body">
-            <div class="bp-msg-head"><span class="bp-msg-name">참가자 (예시) · #충동-sos</span><span class="bp-msg-time">오전 1:15</span></div>
-            <div class="bp-msg-text">지금 너무 힘들어요</div>
-          </div>
-        </div>
-        <div class="bp-msg bot">
-          <div class="bp-avatar">🌙</div>
-          <div class="bp-msg-body">
-            <div class="bp-msg-head"><span class="bp-msg-name">로그아웃라이프봇</span><span class="bp-msg-time">오전 1:15</span></div>
-            <div class="bp-msg-text">🫂 (글에 즉시 리액션)</div>
-            <div class="bp-msg-text" style="margin-top:8px;">괜찮으세요? 혹시 방금 어떤 상황/기분이었는지 한 줄로 남겨주실 수 있어요? 나중에 스스로 패턴을 돌아보는 데 쓰일 거예요. (완전 선택이에요, 그냥 넘어가셔도 괜찮아요 🙂)</div>
-          </div>
-        </div>
-        <div class="bp-illust">↳ 이와 동시에, 최근 활동한 리부트-크루 멤버 몇 명에게도 "도와주실 수 있을까요" 알림이 조용히 갑니다.</div>
-      </div>
-
-      <div class="bp-scene">
-        <span class="bp-scene-tag">Day 31 · 완주</span>
-        <div class="bp-msg bot">
-          <div class="bp-avatar">🌙</div>
-          <div class="bp-msg-body">
-            <div class="bp-msg-head"><span class="bp-msg-name">로그아웃라이프봇</span><span class="bp-msg-time">오후 8:31</span></div>
-            <div class="bp-msg-text">🎉 30일 리부트 챌린지를 완주하셨어요! 정말 대단해요.
-최종 분석은 운영자가 확인 후 곧 DM으로 보내드릴게요.</div>
-            <div class="bp-msg-text" style="margin-top:10px;">🏆 30일 리부트 챌린지 완주로 마스터-크루로 승급했어요! 정말 대단해요.</div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
-
-<!-- ============ FREE PREVIEW (결제 전, 무료 미리보기) ============ -->
-<section class="section paper">
-  <div class="wrap">
-    <div class="eyebrow on-paper warm reveal">결제 전에, 이것부터</div>
-    <h2 class="h-serif reveal" style="margin-top:14px;max-width:560px;">프롤로그 + 1장, 그냥 드릴게요</h2>
-    <p class="reveal" style="margin-top:14px;max-width:600px;font-size:14.5px;line-height:1.9;color:#4a4534;">지갑을 열기 전에 직접 읽어보고 판단하셨으면 좋겠어요. 결제도, 회원가입도 필요 없이 디스코드에서 바로 받을 수 있습니다.</p>
-
-    <div class="pv-steps">
-      <div class="step reveal"><div class="snum">01</div><h4>디스코드 무료 참여</h4><p>가입만 하면 바로 서버 안 모든 채널을 볼 수 있어요. 결제 정보도, 이메일도 필요 없어요.</p></div>
-      <div class="step reveal"><div class="snum">02</div><h4>봇에게 DM으로 "미리보기"</h4><p>로그아웃라이프봇 프로필을 클릭해서 DM 보내기 → "미리보기"라고 딱 한 단어만 보내주세요.</p></div>
-      <div class="step reveal"><div class="snum">03</div><h4>그 자리에서 바로 PDF 수신</h4><p>REBOOT 프롤로그 + 1장 전체가 그 즉시 파일로 도착해요. 기다릴 필요 없어요.</p></div>
-    </div>
-
-    <div class="pv-cta-row reveal">
-      <a href="https://discord.gg/Ajh6mFBCTP" target="_blank" rel="noopener" class="discord-btn">디스코드에서 무료 미리보기 받기 →</a>
-      <span class="pv-note">전체가 마음에 드시면, 그 자리에서 바로 정식판 구매로 이어갈 수 있어요.</span>
     </div>
   </div>
 </section>
@@ -687,7 +689,7 @@ h2.h-serif{ font-family:"Noto Serif CJK KR",serif; font-weight:900; font-size:cl
     </div>
     <div class="faq-item">
       <div class="faq-q">구매 후 파일은 어떻게 받나요?<span class="plus">+</span></div>
-      <div class="faq-a"><p>결제 완료 즉시 PDF 파일을 다운로드할 수 있는 링크가 제공됩니다. 전자책과 워크북 두 파일 모두 평생 소장 가능하며, 재다운로드에 제한이 없습니다.</p></div>
+      <div class="faq-a"><p>결제가 완료되면 로그아웃라이프봇이 디스코드 DM으로 전자책·워크북 PDF 파일을 바로 보내드려요. 두 파일 모두 평생 소장 가능하며, 재다운로드에 제한이 없습니다.</p></div>
     </div>
   </div>
 </section>
