@@ -177,6 +177,32 @@ h2.h-serif{ font-family:"Noto Serif CJK KR",serif; font-weight:900; font-size:cl
 .discord-btn:hover{ transform:translateY(-2px); box-shadow:0 10px 26px rgba(88,101,242,0.35); }
 .discord-note{ margin-top:14px; font-size:11.5px; color:var(--scan); }
 
+/* bot message preview (실제 봇 문구 그대로) */
+.bp-note{ margin-top:14px; max-width:620px; font-size:13px; color:var(--scan-dark); line-height:1.85; }
+.bp-frame{ margin-top:44px; max-width:640px; margin-left:auto; margin-right:auto; border:1px solid var(--wire); border-radius:18px; background:#171510; overflow:hidden; box-shadow:0 30px 70px rgba(0,0,0,0.35); text-align:left; }
+.bp-titlebar{ display:flex; align-items:center; gap:10px; padding:14px 20px; border-bottom:1px solid var(--wire); background:#1c1a14; }
+.bp-titlebar .dots{ display:flex; gap:6px; }
+.bp-titlebar .dots span{ width:9px; height:9px; border-radius:50%; background:#3a3728; }
+.bp-titlebar .who{ font-size:12.5px; font-weight:800; color:#d8d3c4; margin-left:2px; }
+.bp-titlebar .who b{ color:var(--sys); }
+.bp-scene{ padding:22px 22px 6px; }
+.bp-scene + .bp-scene{ border-top:1px dashed var(--wire); }
+.bp-scene-tag{ display:inline-block; font-size:10.5px; font-weight:800; letter-spacing:1.2px; text-transform:uppercase; color:var(--warm); background:rgba(193,122,82,0.12); border:1px solid rgba(193,122,82,0.3); padding:4px 11px; border-radius:20px; margin-bottom:16px; }
+.bp-msg{ display:flex; gap:12px; margin-bottom:18px; }
+.bp-avatar{ flex:none; width:34px; height:34px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:15px; }
+.bp-msg.bot .bp-avatar{ background:linear-gradient(160deg,var(--sys),#5f8a2a); }
+.bp-msg.user .bp-avatar{ background:#3a3c46; }
+.bp-msg-body{ min-width:0; }
+.bp-msg-head{ display:flex; align-items:baseline; gap:8px; margin-bottom:3px; }
+.bp-msg-name{ font-size:13px; font-weight:800; color:#e6e2d2; }
+.bp-msg.bot .bp-msg-name{ color:var(--sys); }
+.bp-msg-time{ font-size:10.5px; color:var(--scan); }
+.bp-msg-text{ font-size:13.5px; line-height:1.75; color:#d8d3c4; white-space:pre-line; }
+.bp-msg-text b{ color:#f0efe4; }
+.bp-msg-quote{ margin-top:8px; padding:10px 14px; border-left:3px solid var(--warm); background:rgba(193,122,82,0.08); border-radius:0 8px 8px 0; font-family:"Noto Serif CJK KR",serif; font-style:italic; font-size:13px; color:#e8c9b4; }
+.bp-illust{ margin-top:2px; margin-bottom:18px; font-size:11px; color:var(--scan); text-align:center; }
+@media (max-width:600px){ .bp-scene{ padding:18px 16px 4px; } }
+
 .faq-item{ border-bottom:1px solid #e6e0cf; }
 .faq-q{ display:flex; justify-content:space-between; align-items:center; padding:20px 4px; cursor:pointer; font-weight:700; font-size:15px; }
 .faq-q .plus{ font-size:20px; color:var(--warm-deep); transition:transform .25s ease; flex:none; margin-left:16px; }
@@ -202,7 +228,7 @@ h2.h-serif{ font-family:"Noto Serif CJK KR",serif; font-weight:900; font-size:cl
 <nav class="nav">
   <div class="wrap">
     <div class="nav-logo">LOGOUTLIFE // <span>REBOOT</span></div>
-    <a href="https://discord.gg/9mDt3SmJUG" target="_blank" rel="noopener" class="nav-cta">지금 시작하기</a>
+    <a href="https://discord.gg/Ajh6mFBCTP" target="_blank" rel="noopener" class="nav-cta">지금 시작하기</a>
   </div>
 </nav>
 
@@ -421,7 +447,8 @@ h2.h-serif{ font-family:"Noto Serif CJK KR",serif; font-weight:900; font-size:cl
       </div>
       <ul class="feat-list reveal">
         <li>전자책 34페이지 — 프롤로그·4개 챕터·에필로그·부록 A/B</li>
-        <li>워크북 39페이지 — 진단 7일 + 확정 1일 + 실행 22일</li>
+        <li>워크북 39페이지 — 진단 7일 + 확정 1일 + 실행 23일</li>
+        <li>구매 다음 날부터 디스코드 DM으로 자동 시작되는 30일 리부트 챌린지 (완주 시 마스터-크루 승급)</li>
         <li>위기 대응 프로토콜 6단계 스프레드 (전문가 연계 안내 포함)</li>
         <li>If-Then 참고 공식 20가지 + 나만의 공식 설계 워크시트</li>
         <li>BDNF 활성화 운동 프로토콜, 심박수 계산 공식 포함</li>
@@ -467,8 +494,105 @@ h2.h-serif{ font-family:"Noto Serif CJK KR",serif; font-weight:900; font-size:cl
     <div class="discord-cta-box reveal">
       <div class="dc-badge">지금 운영 중</div>
       <p>LOGOUTLIFE 디스코드는 이미 열려 있고, 누구나 무료로 바로 참여할 수 있습니다. REBOOT를 구매하면 리부트-크루로 승급되고, 전자책·워크북 파일을 바로 받아보실 수 있어요. 구매자 전용 #함께-만들기 채널에서 새 아이디어나 초안에 가장 먼저 의견을 남길 수 있고, SOS 요청이 올라오면 도움을 요청받는 헬퍼 알림 대상에도 포함돼요.</p>
-      <a href="https://discord.gg/9mDt3SmJUG" target="_blank" rel="noopener" class="discord-btn">디스코드 무료로 참여하기 →</a>
+      <a href="https://discord.gg/Ajh6mFBCTP" target="_blank" rel="noopener" class="discord-btn">디스코드 무료로 참여하기 →</a>
       <div class="discord-note">결제 없이도 지금 바로 참여할 수 있어요.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ BOT MESSAGE PREVIEW (실제 봇 문구 그대로) ============ -->
+<section class="section void">
+  <div class="wrap" style="text-align:center;">
+    <div class="eyebrow sys reveal">말로 설명하는 대신, 그대로 보여드릴게요</div>
+    <h2 class="h-serif reveal" style="margin:14px auto 0;max-width:600px;">봇이 실제로 보내는 문구,<br>딱 그대로입니다</h2>
+    <p class="bp-note reveal" style="margin-left:auto;margin-right:auto;">아래 로그아웃라이프봇의 말풍선은 전부 실제 코드에 그대로 들어있는 문구입니다. 과장하거나 다듬지 않았어요. 참가자 쪽 답장은 이해를 돕기 위한 예시 상황이고, 실제 특정 개인의 대화를 옮긴 것은 아닙니다.</p>
+
+    <div class="bp-frame reveal">
+      <div class="bp-titlebar">
+        <div class="dots"><span></span><span></span><span></span></div>
+        <div class="who">DM · <b>로그아웃라이프봇</b></div>
+      </div>
+
+      <div class="bp-scene">
+        <span class="bp-scene-tag">Day 0 · 챌린지 시작</span>
+        <div class="bp-msg bot">
+          <div class="bp-avatar">🌙</div>
+          <div class="bp-msg-body">
+            <div class="bp-msg-head"><span class="bp-msg-name">로그아웃라이프봇</span><span class="bp-msg-time">오후 9:03</span></div>
+            <div class="bp-msg-text">🛬 REBOOT 구매하신 지 하루 됐네요. 30일 리부트 챌린지를 시작해볼까요?
+매일 저녁 8시에 짧은 질문 하나씩 드리고, 그대로 답장만 해주시면 돼요.
+
+먼저 딱 하나만 적어주세요 — 무너지는 순간엔 판단력이 떨어져서, 그때 가서 다짐하는 건 소용이 없어요.
+
+<b>내가 무너졌을 때, 나에게 해줄 말:</b>
+(예: "이건 실패가 아니라 데이터야. 오늘 하루만 다시 시작하면 돼.")
+
+✅ 적어주시면, 나중에 진짜 무너지는 순간이 왔을 때 저한테 "SOS"라고만 보내주세요. 방금 적어주신 문장을 그 즉시 그대로 다시 보여드릴게요.</div>
+          </div>
+        </div>
+        <div class="bp-msg user">
+          <div class="bp-avatar">🙂</div>
+          <div class="bp-msg-body">
+            <div class="bp-msg-head"><span class="bp-msg-name">참가자 (예시)</span><span class="bp-msg-time">오후 9:07</span></div>
+            <div class="bp-msg-text">이건 실패가 아니라 데이터야. 오늘 하루만 다시 시작하면 돼.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="bp-scene">
+        <span class="bp-scene-tag">며칠 뒤, 무너진 밤</span>
+        <div class="bp-msg user">
+          <div class="bp-avatar">🙂</div>
+          <div class="bp-msg-body">
+            <div class="bp-msg-head"><span class="bp-msg-name">참가자 (예시)</span><span class="bp-msg-time">오후 11:42</span></div>
+            <div class="bp-msg-text">오늘 결국 또 봤어요. 스스로한테 너무 실망스러워요.</div>
+          </div>
+        </div>
+        <div class="bp-msg bot">
+          <div class="bp-avatar">🌙</div>
+          <div class="bp-msg-body">
+            <div class="bp-msg-head"><span class="bp-msg-name">로그아웃라이프봇</span><span class="bp-msg-time">오후 11:42</span></div>
+            <div class="bp-msg-text">기록해뒀어요.
+
+🛬 적어두신 문장이에요:</div>
+            <div class="bp-msg-quote">"이건 실패가 아니라 데이터야. 오늘 하루만 다시 시작하면 돼."</div>
+            <div class="bp-msg-text" style="margin-top:8px;">지금 이 순간, 이거 하나면 충분해요.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="bp-scene">
+        <span class="bp-scene-tag">#충동-sos · 즉시반응</span>
+        <div class="bp-msg user">
+          <div class="bp-avatar">🙂</div>
+          <div class="bp-msg-body">
+            <div class="bp-msg-head"><span class="bp-msg-name">참가자 (예시) · #충동-sos</span><span class="bp-msg-time">오전 1:15</span></div>
+            <div class="bp-msg-text">지금 너무 힘들어요</div>
+          </div>
+        </div>
+        <div class="bp-msg bot">
+          <div class="bp-avatar">🌙</div>
+          <div class="bp-msg-body">
+            <div class="bp-msg-head"><span class="bp-msg-name">로그아웃라이프봇</span><span class="bp-msg-time">오전 1:15</span></div>
+            <div class="bp-msg-text">🫂 (글에 즉시 리액션)</div>
+            <div class="bp-msg-text" style="margin-top:8px;">괜찮으세요? 혹시 방금 어떤 상황/기분이었는지 한 줄로 남겨주실 수 있어요? 나중에 스스로 패턴을 돌아보는 데 쓰일 거예요. (완전 선택이에요, 그냥 넘어가셔도 괜찮아요 🙂)</div>
+          </div>
+        </div>
+        <div class="bp-illust">↳ 이와 동시에, 최근 활동한 리부트-크루 멤버 몇 명에게도 "도와주실 수 있을까요" 알림이 조용히 갑니다.</div>
+      </div>
+
+      <div class="bp-scene">
+        <span class="bp-scene-tag">Day 31 · 완주</span>
+        <div class="bp-msg bot">
+          <div class="bp-avatar">🌙</div>
+          <div class="bp-msg-body">
+            <div class="bp-msg-head"><span class="bp-msg-name">로그아웃라이프봇</span><span class="bp-msg-time">오후 8:31</span></div>
+            <div class="bp-msg-text">🎉 30일 리부트 챌린지를 완주하셨어요! 정말 대단해요.
+최종 분석은 운영자가 확인 후 곧 DM으로 보내드릴게요.</div>
+            <div class="bp-msg-text" style="margin-top:10px;">🏆 30일 리부트 챌린지 완주로 마스터-크루로 승급했어요! 정말 대단해요.</div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </section>
@@ -496,8 +620,8 @@ h2.h-serif{ font-family:"Noto Serif CJK KR",serif; font-weight:900; font-size:cl
         <li>LOGOUTLIFE 디스코드 리부트-크루 승급 + 구매자 전용 #함께-만들기 채널</li>
         <li>SOS 요청 시 도움을 요청받는 헬퍼 알림 대상 포함</li>
       </ul>
-      <a href="https://discord.gg/9mDt3SmJUG" target="_blank" rel="noopener" class="pc-cta">지금 리부트 시작하기 →</a>
-      <div class="pc-note" id="pcNote">버튼을 누르면 LOGOUTLIFE 디스코드로 이동해요. 서버 안에서 봇에게 DM으로 "구매"라고 보내면 결제가 진행됩니다.<br><br>이 책은 개인의 경험과 참고 이론을 담은 자기계발 워크북이며, 검증된 임상 치료를 대체하지 않습니다.<br><br>절제·재발 기록처럼 건강·성생활 관련 민감정보는 서버 멤버 전체가 볼 수 있는 공개 채널(오늘의-기록, 힘든날-나눔, 자유토론 등)에서 나누게 돼요. 어디까지 공유할지는 직접 조절하실 수 있고, 운영진이 이 내용을 따로 캡처하거나 서버 밖으로 유출하지 않아요. 결제를 진행하시면 이 안내에 동의하신 것으로 안내드려요.</div>
+      <a href="https://discord.gg/Ajh6mFBCTP" target="_blank" rel="noopener" class="pc-cta">지금 리부트 시작하기 →</a>
+      <div class="pc-note" id="pcNote">버튼을 누르면 LOGOUTLIFE 디스코드로 이동해요. 서버 안 #공지-규칙 채널에서 구매 방법을 확인하시면 결제가 진행됩니다.<br><br>이 책은 개인의 경험과 참고 이론을 담은 자기계발 워크북이며, 검증된 임상 치료를 대체하지 않습니다.<br><br>절제·재발 기록처럼 건강·성생활 관련 민감정보는 서버 멤버 전체가 볼 수 있는 공개 채널(오늘의-기록, 힘든날-나눔, 자유토론 등)에서 나누게 돼요. 어디까지 공유할지는 직접 조절하실 수 있고, 운영진이 이 내용을 따로 캡처하거나 서버 밖으로 유출하지 않아요. 결제를 진행하시면 이 안내에 동의하신 것으로 안내드려요.</div>
     </div>
     <div class="trust-strip reveal">
       <span>Brunch 독립출판</span>
@@ -547,7 +671,7 @@ h2.h-serif{ font-family:"Noto Serif CJK KR",serif; font-weight:900; font-size:cl
     <div class="eyebrow warm reveal" style="justify-content:center;display:flex;">더 이상의 사슬은 없습니다</div>
     <h2 class="h-serif reveal">과학의 무기를 든 당신 앞에,</h2>
     <p class="reveal">손가락에 피를 흘리며 짱돌을 들었던 사람도 해냈다면, 당신은 더 정교하게 해낼 수 있습니다.</p>
-    <a href="https://discord.gg/9mDt3SmJUG" target="_blank" rel="noopener" class="pc-cta reveal" style="display:inline-block;width:auto;padding:16px 42px;">49,900원으로 시작하기 →</a>
+    <a href="https://discord.gg/Ajh6mFBCTP" target="_blank" rel="noopener" class="pc-cta reveal" style="display:inline-block;width:auto;padding:16px 42px;">49,900원으로 시작하기 →</a>
   </div>
 </section>
 
@@ -565,10 +689,30 @@ h2.h-serif{ font-family:"Noto Serif CJK KR",serif; font-weight:900; font-size:cl
 
 <script>
 const revealEls = document.querySelectorAll('.reveal');
-const io = new IntersectionObserver((entries)=>{
-  entries.forEach(e=>{ if(e.isIntersecting){ e.target.classList.add('in'); io.unobserve(e.target); } });
-},{threshold:0.15});
-revealEls.forEach(el=>io.observe(el));
+if (!('IntersectionObserver' in window)) {
+  // 구형 브라우저 등 IntersectionObserver 미지원 시 즉시 표시
+  revealEls.forEach(el=>el.classList.add('in'));
+} else {
+  const io = new IntersectionObserver((entries)=>{
+    entries.forEach(e=>{ if(e.isIntersecting){ e.target.classList.add('in'); io.unobserve(e.target); } });
+  },{threshold:0.1, rootMargin:'0px 0px -5% 0px'});
+  revealEls.forEach(el=>io.observe(el));
+  // 안전장치: 카카오톡/인스타그램 인앱 브라우저 등 일부 모바일 환경에서
+  // 스크롤 감지가 불안정해 글씨가 계속 흐리게(투명하게) 남는 경우를 막기 위해,
+  // 화면 근처에 온 요소는 일정 시간 후 강제로 보이게 처리합니다.
+  const forceReveal = () => {
+    revealEls.forEach(el=>{
+      if (!el.classList.contains('in')) {
+        const rect = el.getBoundingClientRect();
+        if (rect.top < window.innerHeight * 1.3) el.classList.add('in');
+      }
+    });
+  };
+  window.addEventListener('scroll', forceReveal, { passive: true });
+  window.addEventListener('load', forceReveal);
+  setTimeout(forceReveal, 1500);
+  setTimeout(()=>revealEls.forEach(el=>el.classList.add('in')), 6000);
+}
 
 const beam = document.getElementById('seesawBeam');
 let seesawDone = false;
