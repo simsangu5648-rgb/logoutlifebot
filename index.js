@@ -20,6 +20,7 @@ const {
   isPaymentProcessed,
   markPaymentProcessed,
 } = require("./lib/store");
+const { appendRebootEvent } = require("./lib/sheets");
 
 const {
   DISCORD_TOKEN,
@@ -2239,6 +2240,15 @@ async function handleRebootCheckinReply(message, content) {
       rebootChallenge: { ...rc, selfCompassionNote: content.trim(), status: "in_progress", currentDay: 1, awaitingCheckinReply: false },
     });
     await message.reply(`적어주셔서 고마워요. 오늘 저녁 8시부터 매일 짧은 질문을 하나씩 드릴게요.${crisisDetected ? CRISIS_HOTLINE_NOTE : ""}`);
+    appendRebootEvent({
+      discordUserId,
+      label: member ? member.displayName : discordUserId,
+      type: "Day0 자기연민문장",
+      day: 0,
+      date: today,
+      text: content.trim(),
+      crisisDetected,
+    }).catch(() => {});
     return true;
   }
 
@@ -2250,6 +2260,15 @@ async function handleRebootCheckinReply(message, content) {
     await message.reply(
       `공식을 저장했어요! 내일부터 23일간 실제로 이 공식을 써보면서 기록해봐요.${crisisDetected ? CRISIS_HOTLINE_NOTE : ""}`
     );
+    appendRebootEvent({
+      discordUserId,
+      label: member ? member.displayName : discordUserId,
+      type: "Day8 If-Then공식",
+      day: 8,
+      date: today,
+      text: content.trim(),
+      crisisDetected,
+    }).catch(() => {});
     return true;
   }
 
@@ -2282,7 +2301,7 @@ async function handleRebootCheckinReply(message, content) {
   if (coveredDays.includes(6) && !rc.day6NotifiedAt) {
     patch.day6NotifiedAt = new Date().toISOString();
     await notifyOwnerText(
-      `🔔 유저 ${member ? member.displayName : discordUserId}님이 6일차 작성을 완료했습니다.\n(내일 진단 주간이 끝나요 — 모레 아침 9시에 이 분 데이터가 갈 거예요)`
+      `🔔 유저 ${member ? member.displayName : discordUserId}님이 6일차 작성을 완료했습니다.\n(내일이 진단 마지막 날(Day7)이에요 — 내일 저녁 답장 오는 즉시 분석 요청 프롬프트를 보내드릴게요)`
     );
   }
   if (coveredDays.includes(29) && !rc.day29NotifiedAt) {
@@ -2307,6 +2326,39 @@ async function handleRebootCheckinReply(message, content) {
 
   updateUser(discordUserId, { rebootChallenge: { ...rc, ...patch } });
   await message.reply(replyText);
+
+  const labelForSheet = member ? member.displayName : discordUserId;
+  appendRebootEvent({
+    discordUserId,
+    label: labelForSheet,
+    type: "일반기록",
+    day,
+    date: today,
+    text: content.trim(),
+    crisisDetected,
+  }).catch(() => {});
+  if (coveredDays.length > 1) {
+    const catchupDay = coveredDays[1];
+    appendRebootEvent({
+      discordUserId,
+      label: labelForSheet,
+      type: "캐치업기록",
+      day: catchupDay,
+      date: addDaysKST(today, -1),
+      text: content.trim(),
+      crisisDetected,
+    }).catch(() => {});
+  }
+
+  if (day === 7) {
+    // Day7 데이터가 모두 모였으니 운영자 분석 요청 프롬프트를 실시간으로 바로 보냅니다.
+    // (기존엔 다음날 아침 9시 크론에서 보냈는데, sim님 요청으로 실시간 발송으로 변경 - 2026-09-14.
+    //  runRebootMorningJob의 동일 체크는 이 실시간 발송이 실패했을 때(DM 오류 등) 대비한 안전망으로 남겨둡니다.)
+    const prompt = buildDay7Prompt(discordUserId, member ? member.displayName : discordUserId);
+    await notifyOwnerText(prompt);
+    const fresh = getUser(discordUserId).rebootChallenge;
+    updateUser(discordUserId, { rebootChallenge: { ...fresh, day7DigestSentAt: new Date().toISOString() } });
+  }
 
   if (day === 31) {
     await finalizeRebootCompletion(discordUserId, member);
@@ -2430,6 +2482,9 @@ async function runRebootMorningJob() {
       continue;
     }
 
+    // 원래 발송 지점은 여기(아침 9시)였는데, 이제는 handleRebootCheckinReply에서
+    // Day7 답장이 오는 즉시 실시간으로 보냅니다. 이 블록은 그 실시간 발송이 어떤 이유로든
+    // 실패했을 때(예: 그 순간 DM 전송 오류) 다음날 아침에 놓치지 않고 다시 시도하는 안전망입니다.
     if (rc.status === "in_progress" && rc.currentDay === 8 && !rc.day7DigestSentAt) {
       const prompt = buildDay7Prompt(member.id, member.displayName);
       await notifyOwnerText(prompt);
@@ -2495,16 +2550,63 @@ async function runRebootReminderJob() {
   }
 }
 
+// ── 운영자가 아직 참가자에게 전달 안 한 Day7/Day31 분석이 있으면 리마인드 ──────
+// 디스코드 봇은 DM "읽음 여부"를 알 수 없어서, "!챌린지분석으로 아직 전달 안 함"을
+// 기준으로 삼습니다. 새 크론을 따로 만들지 않고 기존 하루 3번 체크 타이밍
+// (아침 9시 / 저녁 8시 / 밤 10시)에 끼워 넣어서, 해결될 때까지 계속 알림이 갑니다.
+// (sim님 요청, 2026-09-14)
+async function checkPendingRebootOwnerActions() {
+  try {
+    const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
+    if (!guild) return;
+    const ids = allUserIds();
+    const pending = [];
+    for (const id of ids) {
+      const rc = getUser(id).rebootChallenge;
+      if (!rc) continue;
+      if (rc.day7DigestSentAt && !rc.day7AnalysisSentAt) pending.push({ id, phase: "Day7" });
+      if (rc.day31DigestSentAt && !rc.day31AnalysisSentAt) pending.push({ id, phase: "Day31 최종" });
+    }
+    if (!pending.length) return;
+    const lines = [];
+    for (const p of pending) {
+      const m = await guild.members.fetch(p.id).catch(() => null);
+      const label = m ? m.displayName : p.id;
+      lines.push(`- ${label} (${p.phase}) → ${REBOOT_ANALYSIS_COMMAND} ${p.id} <분석 내용>`);
+    }
+    await notifyOwnerText(
+      `⏰ 아직 참가자에게 전달 안 된 챌린지 분석이 있어요:\n${lines.join("\n")}\n\n위 형식대로 봇에게 DM 보내시면 바로 전달돼요.`
+    );
+  } catch (e) {
+    console.error("[챌린지 분석 리마인더 오류]", e);
+  }
+}
+
 function scheduleRebootChallengeJobs() {
-  cron.schedule(REBOOT_MORNING_CRON, () => runRebootMorningJob().catch((e) => console.error("[리부트챌린지 아침 작업 오류]", e)), {
-    timezone: TZ,
-  });
-  cron.schedule(REBOOT_PROMPT_CRON, () => runRebootEveningJob().catch((e) => console.error("[리부트챌린지 저녁 발송 오류]", e)), {
-    timezone: TZ,
-  });
-  cron.schedule(REBOOT_REMINDER_CRON, () => runRebootReminderJob().catch((e) => console.error("[리부트챌린지 리마인더 오류]", e)), {
-    timezone: TZ,
-  });
+  cron.schedule(
+    REBOOT_MORNING_CRON,
+    () => {
+      runRebootMorningJob().catch((e) => console.error("[리부트챌린지 아침 작업 오류]", e));
+      checkPendingRebootOwnerActions().catch((e) => console.error("[챌린지 분석 리마인더 오류]", e));
+    },
+    { timezone: TZ }
+  );
+  cron.schedule(
+    REBOOT_PROMPT_CRON,
+    () => {
+      runRebootEveningJob().catch((e) => console.error("[리부트챌린지 저녁 발송 오류]", e));
+      checkPendingRebootOwnerActions().catch((e) => console.error("[챌린지 분석 리마인더 오류]", e));
+    },
+    { timezone: TZ }
+  );
+  cron.schedule(
+    REBOOT_REMINDER_CRON,
+    () => {
+      runRebootReminderJob().catch((e) => console.error("[리부트챌린지 리마인더 오류]", e));
+      checkPendingRebootOwnerActions().catch((e) => console.error("[챌린지 분석 리마인더 오류]", e));
+    },
+    { timezone: TZ }
+  );
   console.log(
     `[예약 등록] 리부트 챌린지 cron: 아침 "${REBOOT_MORNING_CRON}" / 저녁 "${REBOOT_PROMPT_CRON}" / 리마인더 "${REBOOT_REMINDER_CRON}" (${TZ})`
   );
@@ -2541,8 +2643,15 @@ async function handleRebootAnalysisCommand(message, content) {
     }
     await safeDM(targetMember, `📊 리부트 챌린지 분석 결과예요\n\n${rest}`);
     const u = getUser(targetUser.id);
-    updateUser(targetUser.id, { rebootChallenge: { ...u.rebootChallenge, day7AnalysisSentAt: new Date().toISOString() } });
-    await message.reply(`✅ ${targetMember.displayName}님에게 분석 내용을 전달했어요.`);
+    const rc = u.rebootChallenge;
+    // Day31(최종) 다이제스트가 이미 갔는데 아직 전달 전이면 이번 건 Day31로, 아니면 기존처럼 Day7로 기록합니다.
+    // (리마인더 기능이 어느 항목이 처리됐는지 정확히 추적하려면 이 구분이 필요해요.)
+    const isDay31 = !!(rc.day31DigestSentAt && !rc.day31AnalysisSentAt);
+    const patch = isDay31
+      ? { day31AnalysisSentAt: new Date().toISOString() }
+      : { day7AnalysisSentAt: new Date().toISOString() };
+    updateUser(targetUser.id, { rebootChallenge: { ...rc, ...patch } });
+    await message.reply(`✅ ${targetMember.displayName}님에게 ${isDay31 ? "Day31 최종" : "Day7"} 분석 내용을 전달했어요.`);
   } catch (e) {
     console.error("[챌린지 분석 전달 오류]", e);
     await message.reply("분석 내용을 전달하는 중 오류가 발생했어요.");
