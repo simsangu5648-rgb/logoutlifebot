@@ -29,6 +29,7 @@ a{color:inherit;}
 .eyebrow.on-paper.sys{ color:var(--sys-deep); }
 .eyebrow.on-paper.warm{ color:var(--warm-deep); }
 .section{ padding:104px 0; position:relative; }
+#free-preview{ scroll-margin-top:72px; }
 .section.paper{ background:var(--paper); color:var(--ink); }
 .section.void{ background:var(--void); color:var(--paper); }
 .section.void-2{ background:var(--void-2); color:var(--paper); }
@@ -73,9 +74,11 @@ h2.h-serif{ font-family:"Noto Serif CJK KR",serif; font-weight:900; font-size:cl
 .rt-result .verdict{ margin-top:16px; font-size:13.5px; line-height:1.8; color:#d8d3c4; }
 .rt-result .verdict b{ color:var(--warm); }
 .rt-retry{ margin-top:14px; font-size:12px; color:var(--scan); text-decoration:underline; cursor:pointer; background:none; border:none; }
-.scroll-cue{ margin-top:60px; font-size:11px; letter-spacing:2px; color:var(--scan); text-transform:uppercase; display:flex; align-items:center; gap:8px; }
+.scroll-cue{ margin-top:28px; font-size:11px; letter-spacing:2px; color:var(--scan); text-transform:uppercase; display:flex; align-items:center; gap:8px; }
 .scroll-cue .arrow{ display:inline-block; animation:bob 1.6s infinite; }
 @keyframes bob{ 0%,100%{transform:translateY(0);} 50%{transform:translateY(5px);} }
+.hero-freecta{ margin-top:36px; display:inline-flex; align-items:center; gap:8px; background:transparent; border:1px solid var(--warm); color:var(--warm); font-weight:800; font-size:14px; padding:12px 26px; border-radius:30px; text-decoration:none; transition:background .15s ease, color .15s ease, transform .15s ease; }
+.hero-freecta:hover{ background:var(--warm); color:#1a0d06; transform:translateY(-1px); }
 
 .pq-grid{ display:grid; grid-template-columns:repeat(3,1fr); gap:22px; margin-top:44px; }
 .pq-card{ background:#fff; border:1px solid #e6e0cf; border-radius:12px; padding:24px 22px; }
@@ -206,11 +209,14 @@ h2.h-serif{ font-family:"Noto Serif CJK KR",serif; font-weight:900; font-size:cl
 
 /* free preview (무료 미리보기) */
 .pv-steps{ display:grid; grid-template-columns:repeat(3,1fr); gap:18px; margin-top:40px; }
+.pv-steps.pv-steps-2{ grid-template-columns:repeat(2,1fr); max-width:680px; }
 .pv-steps .step h4{ color:#f0efe4; }
-@media (max-width:820px){ .pv-steps{ grid-template-columns:1fr; } }
+@media (max-width:820px){ .pv-steps, .pv-steps.pv-steps-2{ grid-template-columns:1fr; } }
 .pv-cta-row{ margin-top:38px; display:flex; flex-direction:column; align-items:center; gap:14px; text-align:center; }
 .pv-cta-row .discord-btn{ display:inline-flex; align-items:center; justify-content:center; width:auto; max-width:100%; line-height:1.4; white-space:normal; }
 .pv-note{ font-size:12.5px; color:#6b6550; max-width:420px; }
+.pv-secondary-link{ font-size:12.5px; color:var(--warm-deep); text-decoration:underline; }
+.pv-secondary-link:hover{ color:var(--warm); }
 
 .faq-item{ border-bottom:1px solid #e6e0cf; }
 .faq-q{ display:flex; justify-content:space-between; align-items:center; padding:20px 4px; cursor:pointer; font-weight:700; font-size:15px; }
@@ -237,7 +243,7 @@ h2.h-serif{ font-family:"Noto Serif CJK KR",serif; font-weight:900; font-size:cl
 <nav class="nav">
   <div class="wrap">
     <div class="nav-logo">LOGOUTLIFE // <span>REBOOT</span></div>
-    <a href="https://discord.gg/Ajh6mFBCTP" target="_blank" rel="noopener" class="nav-cta">지금 시작하기</a>
+    <a href="https://discord.gg/Ajh6mFBCTP" rel="noopener" class="nav-cta" id="navCta">구매하기</a>
   </div>
 </nav>
 
@@ -282,6 +288,7 @@ h2.h-serif{ font-family:"Noto Serif CJK KR",serif; font-weight:900; font-size:cl
         </div>
       </div>
     </div>
+    <a href="#free-preview" class="hero-freecta" id="heroFreeCta">무료로 프롤로그 + 1장 먼저 읽기 →</a>
     <div class="scroll-cue"><span class="arrow">↓</span> 이 결과가 이 책의 첫 페이지입니다</div>
   </div>
 </section>
@@ -468,21 +475,21 @@ h2.h-serif{ font-family:"Noto Serif CJK KR",serif; font-weight:900; font-size:cl
 </section>
 
 <!-- ============ FREE PREVIEW (결제 전, 무료 미리보기) ============ -->
-<section class="section paper">
+<section class="section paper" id="free-preview">
   <div class="wrap">
     <div class="eyebrow on-paper warm reveal">결제 전에, 이것부터</div>
     <h2 class="h-serif reveal" style="margin-top:14px;max-width:560px;">프롤로그 + 1장, 신청하면 바로 받아요</h2>
-    <p class="reveal" style="margin-top:14px;max-width:600px;font-size:14.5px;line-height:1.9;color:#4a4534;">지갑을 열기 전에 직접 읽어보고 판단하셨으면 좋겠어요. 결제 없이, 신청서 작성 30초면 그 자리에서 바로 받을 수 있습니다.</p>
+    <p class="reveal" style="margin-top:14px;max-width:600px;font-size:14.5px;line-height:1.9;color:#4a4534;">지갑을 열기 전에 직접 읽어보고 판단하셨으면 좋겠어요. 디스코드 가입 없이도, 이메일만 남기면 30초 안에 바로 받을 수 있어요.</p>
 
-    <div class="pv-steps">
-      <div class="step reveal"><div class="snum">01</div><h4>디스코드 무료 참여</h4><p>가입만 하면 바로 서버 안 모든 채널을 볼 수 있어요. 결제 정보도, 이메일도 필요 없어요.</p></div>
-      <div class="step reveal"><div class="snum">02</div><h4>봇에게 DM으로 "미리보기"</h4><p>로그아웃라이프봇 프로필을 클릭해서 DM 보내기 → "미리보기"라고 딱 한 단어만 보내주세요. (#공지-규칙 채널에도 똑같이 안내돼 있어요.)</p></div>
-      <div class="step reveal"><div class="snum">03</div><h4>간단한 30초, 정보 남기고 PDF 다운로드</h4><p>봇이 안내하는 신청서에 이메일만 남기면, 제출한 그 자리에서 바로 REBOOT 프롤로그 + 1장 PDF 다운로드 링크가 떠요.</p></div>
+    <div class="pv-steps pv-steps-2">
+      <div class="step reveal"><div class="snum">01</div><h4>아래 버튼으로 30초 신청서 작성</h4><p>이메일만 남기면 돼요 (연령대는 선택). 결제 정보도, 회원가입도 필요 없어요.</p></div>
+      <div class="step reveal"><div class="snum">02</div><h4>제출 즉시 PDF 다운로드</h4><p>REBOOT 프롤로그 + 1장 전체가 제출한 그 자리에서 바로 다운로드 링크로 떠요.</p></div>
     </div>
 
     <div class="pv-cta-row reveal">
-      <a href="https://discord.gg/Ajh6mFBCTP" target="_blank" rel="noopener" class="discord-btn">디스코드에서 무료 미리보기 받기 →</a>
+      <a href="https://docs.google.com/forms/d/e/1FAIpQLSeomkOO4-DNSXHDXR57csP2IDgNhGgYUHgJx12rMk815j06-Q/viewform" target="_blank" rel="noopener" class="discord-btn" style="background:var(--warm);">구글폼으로 30초 만에 신청하기 →</a>
       <span class="pv-note">전체가 마음에 드시면, 그 자리에서 바로 정식판 구매로 이어갈 수 있어요.</span>
+      <a href="https://discord.gg/Ajh6mFBCTP" rel="noopener" class="pv-secondary-link">디스코드 커뮤니티도 무료로 참여해보기 (선택) →</a>
     </div>
   </div>
 </section>
@@ -590,6 +597,7 @@ h2.h-serif{ font-family:"Noto Serif CJK KR",serif; font-weight:900; font-size:cl
     <div class="eyebrow on-paper sys reveal">책만으로 부족할 때</div>
     <h2 class="h-serif reveal" style="margin-top:14px;max-width:640px;">혼자 기록하다 보면,<br>결국 혼자 무너집니다</h2>
     <p class="reveal" style="margin-top:14px;max-width:600px;font-size:14.5px;line-height:1.9;color:#4a4534;">워크북은 나 혼자 쓰는 기록입니다. 그런데 대부분의 사람은 3일차, 7일차쯤에서 기록을 멈춥니다 — 의지가 약해서가 아니라, 지켜보는 사람이 아무도 없기 때문입니다. LOGOUTLIFE 디스코드는 그 지점을 메우기 위해 지금 실제로 운영 중인 공간입니다.</p>
+    <p class="reveal" style="margin-top:10px;max-width:600px;font-size:13px;color:#6b6550;line-height:1.8;">🔒 이 안에서 나누는 이야기는 운영진이 따로 캡처하거나 서버 밖으로 유출하지 않아요. 얼마나 자세히, 어디까지 나눌지는 항상 본인이 정해요.</p>
 
     <div class="discord-wrap">
       <div class="discord-panel reveal">
@@ -620,7 +628,7 @@ h2.h-serif{ font-family:"Noto Serif CJK KR",serif; font-weight:900; font-size:cl
     <div class="discord-cta-box reveal">
       <div class="dc-badge">지금 운영 중</div>
       <p>LOGOUTLIFE 디스코드는 이미 열려 있고, 누구나 무료로 바로 참여할 수 있습니다. REBOOT를 구매하면 리부트-크루로 승급되고, 전자책·워크북 파일을 바로 받아보실 수 있어요. 구매자 전용 #함께-만들기 채널에서 새 아이디어나 초안에 가장 먼저 의견을 남길 수 있고, SOS 요청이 올라오면 도움을 요청받는 헬퍼 알림 대상에도 포함돼요.</p>
-      <a href="https://discord.gg/Ajh6mFBCTP" target="_blank" rel="noopener" class="discord-btn">디스코드 무료로 참여하기 →</a>
+      <a href="https://discord.gg/Ajh6mFBCTP" rel="noopener" class="discord-btn">디스코드 무료로 참여하기 →</a>
       <div class="discord-note">결제 없이도 지금 바로 참여할 수 있어요.</div>
     </div>
   </div>
@@ -649,7 +657,7 @@ h2.h-serif{ font-family:"Noto Serif CJK KR",serif; font-weight:900; font-size:cl
         <li>LOGOUTLIFE 디스코드 리부트-크루 승급 + 구매자 전용 #함께-만들기 채널</li>
         <li>SOS 요청 시 도움을 요청받는 헬퍼 알림 대상 포함</li>
       </ul>
-      <a href="https://discord.gg/Ajh6mFBCTP" target="_blank" rel="noopener" class="pc-cta">지금 리부트 시작하기 →</a>
+      <a href="https://discord.gg/Ajh6mFBCTP" rel="noopener" class="pc-cta">지금 리부트 시작하기 →</a>
       <div class="pc-note" id="pcNote">버튼을 누르면 LOGOUTLIFE 디스코드로 이동해요. 서버 안 #공지-규칙 채널에서 구매 방법을 확인하시면 결제가 진행됩니다.<br><br>이 책은 개인의 경험과 참고 이론을 담은 자기계발 워크북이며, 검증된 임상 치료를 대체하지 않습니다.<br><br>절제·재발 기록처럼 건강·성생활 관련 민감정보는 서버 멤버 전체가 볼 수 있는 공개 채널(오늘의-기록, 힘든날-나눔, 자유토론 등)에서 나누게 돼요. 어디까지 공유할지는 직접 조절하실 수 있고, 운영진이 이 내용을 따로 캡처하거나 서버 밖으로 유출하지 않아요. 결제를 진행하시면 이 안내에 동의하신 것으로 안내드려요.</div>
     </div>
     <div class="trust-strip reveal">
@@ -700,7 +708,7 @@ h2.h-serif{ font-family:"Noto Serif CJK KR",serif; font-weight:900; font-size:cl
     <div class="eyebrow warm reveal" style="justify-content:center;display:flex;">더 이상의 사슬은 없습니다</div>
     <h2 class="h-serif reveal">과학의 무기를 든 당신 앞에,</h2>
     <p class="reveal">손가락에 피를 흘리며 짱돌을 들었던 사람도 해냈다면, 당신은 더 정교하게 해낼 수 있습니다.</p>
-    <a href="https://discord.gg/Ajh6mFBCTP" target="_blank" rel="noopener" class="pc-cta reveal" style="display:inline-block;width:auto;padding:16px 42px;">49,900원으로 시작하기 →</a>
+    <a href="https://discord.gg/Ajh6mFBCTP" rel="noopener" class="pc-cta reveal" style="display:inline-block;width:auto;padding:16px 42px;">49,900원으로 시작하기 →</a>
   </div>
 </section>
 
@@ -717,6 +725,18 @@ h2.h-serif{ font-family:"Noto Serif CJK KR",serif; font-weight:900; font-size:cl
 </footer>
 
 <script>
+// 히어로의 "무료로 프롤로그+1장 먼저 읽기" 버튼: 다른 페이지로 이동하는 게 아니라
+// 같은 페이지 안에서 무료 미리보기 섹션까지 빠르게 스크롤만 이동시킵니다.
+// (주소창 URL도 안 바뀌게 해서, 클릭했을 때 "어디로 이동한 것"처럼 느껴지지 않게 합니다.)
+const heroFreeCta = document.getElementById('heroFreeCta');
+const freePreviewSection = document.getElementById('free-preview');
+if (heroFreeCta && freePreviewSection) {
+  heroFreeCta.addEventListener('click', function(e){
+    e.preventDefault();
+    freePreviewSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+}
+
 const revealEls = document.querySelectorAll('.reveal');
 if (!('IntersectionObserver' in window)) {
   // 구형 브라우저 등 IntersectionObserver 미지원 시 즉시 표시
@@ -834,6 +854,8 @@ document.querySelectorAll('.faq-item').forEach(item=>{
     if (!uid) return;
     var payHref = window.location.origin + '/go/' + encodeURIComponent(uid);
     document.querySelectorAll('a.pc-cta').forEach(function(a){ a.href = payHref; });
+    var navCta = document.getElementById('navCta');
+    if (navCta) { navCta.href = payHref; navCta.removeAttribute('target'); }
     var note = document.getElementById('pcNote');
     if (note) {
       note.innerHTML = '버튼을 누르면 본인 전용 결제 페이지로 바로 연결돼요.<br><br>이 책은 개인의 경험과 참고 이론을 담은 자기계발 워크북이며, 검증된 임상 치료를 대체하지 않습니다.<br><br>절제·재발 기록처럼 건강·성생활 관련 민감정보는 서버 멤버 전체가 볼 수 있는 공개 채널(오늘의-기록, 힘든날-나눔, 자유토론 등)에서 나누게 돼요. 어디까지 공유할지는 직접 조절하실 수 있고, 운영진이 이 내용을 따로 캡처하거나 서버 밖으로 유출하지 않아요. 결제를 진행하시면 이 안내에 동의하신 것으로 안내드려요.';
