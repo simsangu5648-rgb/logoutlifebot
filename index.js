@@ -20,7 +20,7 @@ const {
   isPaymentProcessed,
   markPaymentProcessed,
 } = require("./lib/store");
-const { appendRebootEvent } = require("./lib/sheets");
+const { appendRebootEvent, isConfigured: isSheetsConfigured } = require("./lib/sheets");
 
 const {
   DISCORD_TOKEN,
@@ -264,6 +264,7 @@ const REBOOT_START_COMMAND = "!챌린지시작";
 const REBOOT_OPT_OUT_PHRASES = ["챌린지그만", "!챌린지그만"];
 const REBOOT_ANALYSIS_COMMAND = "!챌린지분석";
 const REBOOT_STATUS_COMMAND = "!챌린지현황";
+const REBOOT_SHEET_BACKFILL_COMMAND = "!챌린지시트백필";
 const REBOOT_PROMPT_CRON = process.env.REBOOT_PROMPT_CRON || "0 20 * * *"; // 매일 20시 발송
 const REBOOT_REMINDER_CRON = process.env.REBOOT_REMINDER_CRON || "0 22 * * *"; // 매일 22시 리마인더
 const REBOOT_MORNING_CRON = process.env.REBOOT_MORNING_CRON || "0 9 * * *"; // D+1 자동시작 + Day7 다이제스트
@@ -506,6 +507,8 @@ client.on(Events.MessageCreate, async (message) => {
         await handleRebootAnalysisCommand(message, content);
       } else if (content === REBOOT_STATUS_COMMAND || content.startsWith(REBOOT_STATUS_COMMAND + " ")) {
         await handleRebootStatusCommand(message, content);
+      } else if (content === REBOOT_SHEET_BACKFILL_COMMAND) {
+        await handleRebootSheetBackfillCommand(message);
       } else if (content === REBOOT_START_COMMAND) {
         await handleRebootStartCommand(message);
       } else if (content === "회고" || content === "!회고") {
@@ -2748,6 +2751,94 @@ async function handleRebootStatusCommand(message, content) {
   } catch (e) {
     console.error("[챌린지 현황 조회 오류]", e);
     await message.reply("현황 조회 중 오류가 발생했어요.");
+  }
+}
+
+// ── 운영자 명령어: !챌린지시트백필 (구글시트 연동이 안 되던 동안 쌓인 기록을 한 번에 채워넣기) ──
+// 구글시트 연동 자체가 코드 버그로 계속 실패하고 있었지만, 참가자 기록은 항상 데이터
+// 저장소(data.json)에 먼저 남고 그 다음에 시트 기록을 "덤으로" 시도하는 구조였어서,
+// 이 명령어로 지금까지의 기록을 한 번에 시트로 다시 보낼 수 있습니다. 몇 번을 실행해도
+// 안전하도록 매번 전체를 다시 보내는 방식이라, 시트에 중복 행이 쌓일 수 있는 점은 감안해주세요
+// (필요하면 시트에서 중복 행만 걸러내면 됩니다).
+async function handleRebootSheetBackfillCommand(message) {
+  try {
+    const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
+    if (!guild || guild.ownerId !== message.author.id) {
+      await message.reply("이 명령어는 서버 운영자만 사용할 수 있어요.");
+      return;
+    }
+    if (!isSheetsConfigured()) {
+      await message.reply(
+        "구글시트 연동 환경변수(REBOOT_SHEET_ID / GOOGLE_SERVICE_ACCOUNT_EMAIL / GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY)가 설정 안 돼 있어서 백필을 진행할 수 없어요."
+      );
+      return;
+    }
+    await message.reply("백필을 시작할게요. 기록량에 따라 시간이 좀 걸릴 수 있어요 — 끝나면 결과를 알려드릴게요.");
+
+    const ids = allUserIds();
+    let userCount = 0;
+    let rowCount = 0;
+    for (const id of ids) {
+      const u = getUser(id);
+      const rc = u.rebootChallenge;
+      if (!rc || (!rc.selfCompassionNote && !(rc.entries && rc.entries.length) && !(rc.formulas && rc.formulas.length))) {
+        continue;
+      }
+      const member = await guild.members.fetch(id).catch(() => null);
+      const label = member ? member.displayName : id;
+      let touched = false;
+
+      if (rc.selfCompassionNote) {
+        const text = rc.selfCompassionNote;
+        await appendRebootEvent({
+          discordUserId: id,
+          label,
+          type: "Day0 자기연민문장(백필)",
+          day: 0,
+          date: rc.startDate || "",
+          text,
+          crisisDetected: !!detectCrisisLevel(text),
+        });
+        rowCount++;
+        touched = true;
+      }
+
+      for (const entry of rc.entries || []) {
+        await appendRebootEvent({
+          discordUserId: id,
+          label,
+          type: entry.catchup ? "캐치업기록(백필)" : "일반기록(백필)",
+          day: entry.day,
+          date: entry.date,
+          text: entry.rawText,
+          crisisDetected: !!detectCrisisLevel(entry.rawText),
+        });
+        rowCount++;
+        touched = true;
+      }
+
+      if (rc.formulas && rc.formulas.length) {
+        const text = rc.formulas.join("\n");
+        await appendRebootEvent({
+          discordUserId: id,
+          label,
+          type: "Day8 If-Then공식(백필, 재구성됨)",
+          day: 8,
+          date: rc.startDate ? addDaysKST(rc.startDate, 8) : "",
+          text,
+          crisisDetected: false,
+        });
+        rowCount++;
+        touched = true;
+      }
+
+      if (touched) userCount++;
+    }
+
+    await message.reply(`✅ 백필 완료: 참가자 ${userCount}명, 총 ${rowCount}행을 시트에 다시 기록했어요.`);
+  } catch (e) {
+    console.error("[챌린지 시트 백필 오류]", e);
+    await message.reply("백필 중 오류가 발생했어요. 로그를 확인해주세요.");
   }
 }
 
