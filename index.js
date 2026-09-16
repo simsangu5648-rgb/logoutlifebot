@@ -952,9 +952,9 @@ async function handleEbookPreviewRequest(message) {
   try {
     await message.reply(
       `📖 **${EBOOK_NAME}** 무료 미리보기(프롤로그 + 1장 전체)는 아래 신청서 작성 후 바로 받으실 수 있어요!\n\n` +
-      `1️. 아래 링크 눌러서 30초짜리 신청서 작성\n\n` +
-      `2️. 이메일 남기고 안내 문구 확인 후 동의 체크\n\n` +
-      `3️. 제출하자마자 그 자리에서 바로 PDF 다운로드 링크가 떠요\n\n` +
+      `1️⃣ 아래 링크 눌러서 30초짜리 신청서 작성\n\n` +
+      `2️⃣ 이메일 남기고 안내 문구 확인 후 동의 체크\n\n` +
+      `3️⃣ 제출하자마자 그 자리에서 바로 PDF 다운로드 링크가 떠요\n\n` +
       `👉 ${EBOOK_PREVIEW_FORM_URL}\n\n` +
       `(#공지-규칙 채널에도 같은 안내가 있어요)\n\n` +
       `전체 내용이 마음에 드시면 "${EBOOK_PURCHASE_COMMANDS[0]}"라고 보내주세요 🙂`
@@ -1519,6 +1519,24 @@ app.get("/go/:discordUserId", async (req, res) => {
   }
 
   try {
+    // 결제 링크를 만들기 전에, 이 ID가 실제로 디스코드 서버에 있는 멤버인지 먼저 확인합니다.
+    // 이 확인 없이 바로 결제 링크를 만들면, 존재하지 않거나 서버를 나간 ID로도 결제가
+    // 진행돼버려서 "결제는 됐는데 파일도 승급도 안 가는" 사고로 이어질 수 있습니다.
+    let member = null;
+    try {
+      const guild = await client.guilds.fetch(GUILD_ID);
+      member = await guild.members.fetch(discordUserId).catch(() => null);
+    } catch (e) {
+      console.error("[/go 멤버 확인 오류]", e);
+    }
+    if (!member) {
+      return res
+        .status(403)
+        .send(
+          `이 링크는 디스코드 서버 멤버일 때만 사용할 수 있어요. 먼저 디스코드 서버에 참여하신 뒤, 봇에게 DM으로 "구매"라고 보내주세요 — 그러면 본인 전용 결제 링크를 새로 보내드려요.`
+        );
+    }
+
     const user = getUser(discordUserId);
     if (user.ebookPurchased) {
       return res
@@ -2115,6 +2133,23 @@ ${execLines.join("\n") || "(아직 없음)"}`;
 async function startRebootChallengeDay0(discordUserId, member, attemptNumber) {
   const prev = getUser(discordUserId).rebootChallenge;
   const today = todayKST();
+
+  // 이전 도전에서 운영자가 아직 전달 안 한 Day7/Day31 분석이 있는 채로 재도전이 시작되면,
+  // 아래에서 상태를 통째로 초기화하면서 그 사실이 조용히 사라질 수 있습니다(전달 리마인더가
+  // 새 도전의 필드를 보게 되기 때문). 초기화 직전에 한 번 더 운영자에게 짚어줍니다.
+  if (prev) {
+    if (prev.day7DigestSentAt && !prev.day7AnalysisSentAt) {
+      await notifyOwnerText(
+        `⚠️ ${member ? member.displayName : discordUserId}님이 이전 도전의 Day7 분석을 전달받기 전에 챌린지를 재시작했어요. "!챌린지현황"으로 이전 기록을 확인해서 놓치지 않게 챙겨주세요.`
+      ).catch(() => {});
+    }
+    if (prev.day31DigestSentAt && !prev.day31AnalysisSentAt) {
+      await notifyOwnerText(
+        `⚠️ ${member ? member.displayName : discordUserId}님이 이전 도전의 최종(Day31) 분석을 전달받기 전에 챌린지를 재시작했어요. 이전 기록을 확인해서 놓치지 않게 챙겨주세요.`
+      ).catch(() => {});
+    }
+  }
+
   updateUser(discordUserId, {
     rebootChallenge: {
       active: true,
@@ -2135,6 +2170,8 @@ async function startRebootChallengeDay0(discordUserId, member, attemptNumber) {
       day6NotifiedAt: null,
       day29NotifiedAt: null,
       day7AnalysisSentAt: null,
+      day31AnalysisSentAt: null,
+      day7GraceGiven: false,
       masterCrewGrantedAt: prev.masterCrewGrantedAt || null, // 최초 완주 여부는 재도전해도 유지
       completedAt: null,
       failedAt: null,
@@ -2431,12 +2468,38 @@ async function handleRebootMissedAndAdvance(discordUserId, member) {
     return;
   }
 
+  // Day7 → Day8(게이트)은 형식이 달라서 다른 날짜처럼 buildRebootNightlyPrompt로
+  // 자연스럽게 합쳐 보낼 수 없습니다. 그래도 다른 날짜와 동일하게 "하루 유예"를 주기
+  // 위해, 처음 놓친 저녁에는 결번 확정 없이 Day7 질문을 한 번 더 보내고 하루 더 기다립니다.
+  // (유예 없이 바로 다음 로직으로 가면, phase가 다르다는 이유로 다른 날짜와 달리
+  //  Day7만 첫날 저녁에 바로 결번 처리돼버립니다.)
+  if (overdueDay === 7 && !rc.day7GraceGiven) {
+    await safeDM(
+      member,
+      rebootDay1to7Message(7) +
+        `\n\n(어제 답장이 없어서 다시 보내드려요 — 오늘 저녁까지 답장해주시면 결번 처리 안 돼요.)`
+    );
+    updateUser(discordUserId, {
+      rebootChallenge: {
+        ...getUser(discordUserId).rebootChallenge,
+        missedDays,
+        pendingCatchupDay: null,
+        day7GraceGiven: true,
+        awaitingCheckinReply: true,
+        checkinPromptSentAt: new Date().toISOString(),
+        reminderSentToday: false,
+      },
+    });
+    return;
+  }
+
   const nextDay = overdueDay === 7 ? 8 : overdueDay + 1;
   const nextPhase = rebootPhase(nextDay);
   let gateNote = "";
 
   // 다음 프롬프트가 형식이 다른 구간(특히 Day8 게이트)이면 캐치업을 더 들고 있을 수 없으니
-  // 여기서 결번으로 확정합니다 (1일 유예는 같은 형식 구간 안에서만 의미가 있어요).
+  // 여기서 결번으로 확정합니다 (1일 유예는 같은 형식 구간 안에서만 의미가 있어요.
+  // Day7은 위에서 이미 한 번 유예를 줬기 때문에 여기로 내려오면 확정 처리합니다).
   if (rebootPhase(pendingCatchupDay) !== nextPhase) {
     if (!missedDays.includes(pendingCatchupDay)) {
       missedDays.push(pendingCatchupDay);
@@ -2458,6 +2521,7 @@ async function handleRebootMissedAndAdvance(discordUserId, member) {
       missedDays,
       pendingCatchupDay,
       currentDay: nextDay,
+      day7GraceGiven: false,
       awaitingCheckinReply: true,
       checkinPromptSentAt: new Date().toISOString(),
       reminderSentToday: false,
