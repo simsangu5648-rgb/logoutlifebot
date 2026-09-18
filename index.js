@@ -265,6 +265,7 @@ const REBOOT_OPT_OUT_PHRASES = ["챌린지그만", "!챌린지그만"];
 const REBOOT_ANALYSIS_COMMAND = "!챌린지분석";
 const REBOOT_STATUS_COMMAND = "!챌린지현황";
 const REBOOT_SHEET_BACKFILL_COMMAND = "!챌린지시트백필";
+const REBOOT_STATS_COMMAND = "!챌린지통계";
 const REBOOT_PROMPT_CRON = process.env.REBOOT_PROMPT_CRON || "0 20 * * *"; // 매일 20시 발송
 const REBOOT_REMINDER_CRON = process.env.REBOOT_REMINDER_CRON || "0 22 * * *"; // 매일 22시 리마인더
 const REBOOT_MORNING_CRON = process.env.REBOOT_MORNING_CRON || "0 9 * * *"; // D+1 자동시작 + Day7 다이제스트
@@ -509,6 +510,8 @@ client.on(Events.MessageCreate, async (message) => {
         await handleRebootStatusCommand(message, content);
       } else if (content === REBOOT_SHEET_BACKFILL_COMMAND) {
         await handleRebootSheetBackfillCommand(message);
+      } else if (content === REBOOT_STATS_COMMAND) {
+        await handleRebootStatsCommand(message);
       } else if (content === REBOOT_START_COMMAND) {
         await handleRebootStartCommand(message);
       } else if (content === "회고" || content === "!회고") {
@@ -2751,6 +2754,75 @@ async function handleRebootStatusCommand(message, content) {
   } catch (e) {
     console.error("[챌린지 현황 조회 오류]", e);
     await message.reply("현황 조회 중 오류가 발생했어요.");
+  }
+}
+
+// ── 운영자 명령어: !챌린지통계 (완주율·Day7/Day31 분석 전달률을 한눈에) ─────────
+// "가격만큼 가치를 실제로 전달하고 있는가"는 콘텐츠가 아니라 실행(=분석이 빠짐없이
+// 전달됐는가)으로 확인해야 한다는 판단 하에 추가. 참가자별 rebootChallenge 상태를
+// 전수 집계해서, 시작 대비 완주율과 Day7/Day31 분석 전달률(=약속한 사람 손길이
+// 실제로 도달한 비율)을 바로 보여줍니다. 새 저장소를 만들지 않고 기존 data.json에
+// 이미 있는 값만 집계하므로, 정확도는 lib/store.js의 rebootChallenge 필드에 그대로 의존합니다.
+async function handleRebootStatsCommand(message) {
+  try {
+    const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
+    if (!guild || guild.ownerId !== message.author.id) {
+      await message.reply("이 명령어는 서버 운영자만 사용할 수 있어요.");
+      return;
+    }
+
+    const ids = allUserIds();
+    let started = 0;
+    const byStatus = { pending_day0: 0, in_progress: 0, completed: 0, failed: 0, opted_out: 0, 기타: 0 };
+    let day7DigestSent = 0,
+      day7AnalysisSent = 0,
+      day31DigestSent = 0,
+      day31AnalysisSent = 0;
+    const pendingList = [];
+
+    for (const id of ids) {
+      const rc = getUser(id).rebootChallenge;
+      if (!rc || (!rc.attemptNumber && !rc.status)) continue;
+      started++;
+      if (rc.status && byStatus[rc.status] !== undefined) byStatus[rc.status]++;
+      else byStatus["기타"]++;
+
+      if (rc.day7DigestSentAt) day7DigestSent++;
+      if (rc.day7AnalysisSentAt) day7AnalysisSent++;
+      if (rc.day31DigestSentAt) day31DigestSent++;
+      if (rc.day31AnalysisSentAt) day31AnalysisSent++;
+
+      if (rc.day7DigestSentAt && !rc.day7AnalysisSentAt) pendingList.push({ id, phase: "Day7" });
+      if (rc.day31DigestSentAt && !rc.day31AnalysisSentAt) pendingList.push({ id, phase: "Day31" });
+    }
+
+    const pct = (num, den) => (den > 0 ? `${((num / den) * 100).toFixed(0)}%` : "해당없음");
+
+    const lines = [
+      `📊 챌린지 통계 (전체 참가 이력 기준, 시작 ${started}명)`,
+      "",
+      `상태별 — 진행중 ${byStatus.in_progress} / 완주 ${byStatus.completed} / 실패(중단) ${byStatus.failed} / 대기(Day0) ${byStatus.pending_day0} / 스스로 중단 ${byStatus.opted_out}`,
+      `완주율 = 완주 ${byStatus.completed} / 시작 ${started} = ${pct(byStatus.completed, started)}`,
+      "",
+      `Day7 분석 전달률 = 전달 ${day7AnalysisSent} / 대상 ${day7DigestSent} = ${pct(day7AnalysisSent, day7DigestSent)}`,
+      `Day31 분석 전달률 = 전달 ${day31AnalysisSent} / 대상 ${day31DigestSent} = ${pct(day31AnalysisSent, day31DigestSent)}`,
+    ];
+
+    if (pendingList.length) {
+      const detail = [];
+      for (const p of pendingList) {
+        const m = await guild.members.fetch(p.id).catch(() => null);
+        detail.push(`- ${m ? m.displayName : p.id} (${p.phase})`);
+      }
+      lines.push("", `⏳ 아직 분석 못 받은 ${pendingList.length}명:`, ...detail);
+    } else if (day7DigestSent + day31DigestSent > 0) {
+      lines.push("", "✅ 밀린 분석 없음 — 대상자 전원에게 전달 완료된 상태예요.");
+    }
+
+    await message.reply(lines.join("\n"));
+  } catch (e) {
+    console.error("[챌린지 통계 조회 오류]", e);
+    await message.reply("통계 집계 중 오류가 발생했어요.");
   }
 }
 
