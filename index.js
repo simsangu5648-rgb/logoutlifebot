@@ -21,7 +21,7 @@ const {
   markPaymentProcessed,
   nextConvoStarterIndex,
 } = require("./lib/store");
-const { appendRebootEvent, isConfigured: isSheetsConfigured } = require("./lib/sheets");
+const { appendRebootEvent, appendSalesEvent, isConfigured: isSheetsConfigured } = require("./lib/sheets");
 
 const {
   DISCORD_TOKEN,
@@ -1622,6 +1622,26 @@ app.post("/payapp/feedback", async (req, res) => {
 
     updateUser(discordUserId, { ebookPurchased: true, ebookPurchasedAt: new Date().toISOString() });
     await promoteToGrowCrewByEbook(discordUserId);
+
+    // 세금/장부 정리용 매출 자동 기록 - 닉네임은 best-effort로만 붙이고,
+    // 이 기록이 실패하거나 늦어져도 결제 처리 응답(SUCCESS)에는 영향 없게 fire-and-forget으로 둡니다.
+    (async () => {
+      let label = discordUserId;
+      try {
+        const guild = await client.guilds.fetch(GUILD_ID);
+        const member = await guild.members.fetch(discordUserId).catch(() => null);
+        if (member) label = member.displayName;
+      } catch (e) {
+        console.error("[매출 기록] 닉네임 조회 실패", e);
+      }
+      appendSalesEvent({
+        discordUserId,
+        label,
+        goodName: body.goodname || EBOOK_NAME,
+        price: body.price || EBOOK_PRICE,
+        mulNo: mulNo || "",
+      }).catch((e) => console.error("[매출 기록 오류]", e));
+    })();
 
     res.status(200).send("SUCCESS");
   } catch (e) {
