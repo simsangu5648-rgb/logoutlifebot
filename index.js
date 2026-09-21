@@ -20,8 +20,14 @@ const {
   isPaymentProcessed,
   markPaymentProcessed,
   nextConvoStarterIndex,
+  nextConfessionResponseIndex,
 } = require("./lib/store");
-const { appendRebootEvent, appendSalesEvent, isConfigured: isSheetsConfigured } = require("./lib/sheets");
+const {
+  appendRebootEvent,
+  appendSalesEvent,
+  appendConfessionEvent,
+  isConfigured: isSheetsConfigured,
+} = require("./lib/sheets");
 
 const {
   DISCORD_TOKEN,
@@ -452,6 +458,89 @@ async function checkCrisisKeywordsAndNotify(message, content) {
   }
 }
 
+// ── 고해성사: 판단 없이 마음속 얘기를 DM으로 편하게 털어놓는 기능 ─────────────
+// #충동-sos(지금 막 충동이 올라오는 실시간 SOS)와는 성격이 달라서 별도로 뒀습니다 —
+// 이미 있었던 일이든, 그냥 오늘 힘들었던 마음이든 형식 없이 털어놓는 용도입니다.
+// 공개 채널에는 절대 올라가지 않고, 항상 DM 안에서만 이루어집니다.
+const CONFESSION_COMMAND = process.env.CONFESSION_COMMAND || "!고해성사";
+// "!고해성사"를 보낸 뒤 실제 고백 내용을 몇 분 안에 보내야 그 답으로 인정할지 (분)
+const CONFESSION_REPLY_WINDOW_MINUTES = parseInt(process.env.CONFESSION_REPLY_WINDOW_MINUTES || "60", 10);
+
+// 1차 반응 문구 풀 — 큰 풀 + (재배포돼도 이어지는) 순환으로, 같은 사람이 여러 번
+// 이용해도 풀 전체를 한 바퀴 돌기 전엔 같은 문구가 반복되지 않게 했습니다.
+// 여기에 사람이 쓴 것처럼 자연스러운 문장을 계속 추가해도 되고, 순서를 바꿔도 됩니다.
+const CONFESSION_RESPONSES = [
+  "여기 있어요. 오늘 그 얘기 꺼낸 것만으로도 쉬운 일 아니었을 거예요.",
+  "혼자 갖고 있지 않고 여기 적어주셔서 다행이에요.",
+  "잘했다 못했다 판단하러 온 거 아니에요. 그냥 듣고 있어요.",
+  "이런 날도 있는 거예요. 내일 또 시작하면 돼요.",
+  "말하기 전보다 지금이 조금은 더 가벼워졌길 바라요.",
+  "솔직하게 적어주신 것, 그 자체로 이미 의미 있어요.",
+  "지금 이 마음, 여기 남겨뒀어요. 혼자 짊어지지 않으셔도 돼요.",
+  "누구나 이런 순간이 있어요. 오늘도 여기까지 온 것만으로 충분해요.",
+  "괜찮아요, 천천히 가도 돼요. 지금 이 순간으로 자신을 탓하지 마세요.",
+  "이 얘기, 저한테 남겨주셔서 고마워요. 잘 받았어요.",
+  "무너진 것 같아도, 지금 이렇게 말하고 있다는 것 자체가 다시 시작하고 있다는 뜻이에요.",
+  "당신 잘못이 아니에요. 그냥 지나가는 파도예요, 결국 가라앉아요.",
+];
+
+function nextConfessionResponse() {
+  const n = nextConfessionResponseIndex();
+  return CONFESSION_RESPONSES[n % CONFESSION_RESPONSES.length];
+}
+
+async function handleConfessionStart(message) {
+  updateUser(message.author.id, {
+    awaitingConfessionReply: true,
+    confessionPromptSentAt: new Date().toISOString(),
+  });
+  await message.reply(
+    "여기 있어요. 무슨 얘기든 편하게 써주세요. 재발이든, 그냥 오늘 힘들었던 거든 다 괜찮아요.\n" +
+      "준비되시면 다음 메시지로 편하게 보내주시면 돼요 (사진만 보내셔도 괜찮아요)."
+  );
+}
+
+// awaitingConfessionReply 상태에서 다음 DM을 받으면 이 함수가 실제 처리를 맡습니다.
+// (위기 키워드 검사 자체는 이미 상위 라우터에서 모든 DM에 대해 항상 실행된 뒤입니다 —
+// 여기서는 그 결과를 이 사람에게 보여줄 답장 문구를 고르는 데에만 다시 씁니다.)
+async function handleConfessionReply(message, content) {
+  const crisisDetected = !!detectCrisisLevel(content);
+
+  updateUser(message.author.id, {
+    awaitingConfessionReply: false,
+    confessionPromptSentAt: null,
+    confessionCount: (getUser(message.author.id).confessionCount || 0) + 1,
+    lastConfessionAt: new Date().toISOString(),
+  });
+
+  const user = getUser(message.author.id);
+  const note = user.rebootChallenge && user.rebootChallenge.selfCompassionNote;
+
+  let replyText = nextConfessionResponse();
+  if (note) {
+    replyText += `\n\n🛬 예전에 스스로 이렇게 적어두셨었어요:\n"${note}"`;
+  }
+  if (crisisDetected) replyText += CRISIS_HOTLINE_NOTE;
+
+  await message.reply(replyText);
+
+  // 운영자에게 조용히 알림 (완전히 선택 사항인 후속 답장을 위함 - 의무 아님, 읽씹해도 무방).
+  // 위기 신호가 감지된 경우엔 상위 라우터의 checkCrisisKeywordsAndNotify가 이미 🚨 알림을
+  // 원문과 함께 보냈으니, 여기서 또 보내 중복 알림이 되지 않게 합니다.
+  if (!crisisDetected) {
+    notifyOwnerText(
+      `💬 고해성사 — <@${message.author.id}> (${message.author.username})\n` +
+        `"${content.slice(0, 500)}"`
+    ).catch((e) => console.error("[고해성사 운영자 알림 오류]", e));
+  }
+
+  appendConfessionEvent({
+    discordUserId: message.author.id,
+    label: message.author.username,
+    crisisDetected,
+  }).catch((e) => console.error("[고해성사 기록 오류]", e));
+}
+
 // ── 데이 템플릿 ────────────────────────────────────────────────────────
 function rebootDay0Message() {
   return (
@@ -640,6 +729,8 @@ client.on(Events.MessageCreate, async (message) => {
         await handleSosPatternHistoryRequest(message);
       } else if (content === "기록" || content === STREAK_COMMAND) {
         await handleStreakRequest(message);
+      } else if (content === "고해성사" || content === CONFESSION_COMMAND) {
+        await handleConfessionStart(message);
       } else {
         await handlePendingDmReply(message, content);
       }
@@ -954,6 +1045,15 @@ async function handlePendingDmReply(message, content) {
     const reflections = [...(user.reflections || []), { week: weekKey, text: content.slice(0, 500) }];
     updateUser(message.author.id, { reflections, awaitingReflectionReply: false, reflectionPromptSentAt: null });
     await message.reply('적어주셔서 고마워요. "회고"라고 보내시면 그동안 남긴 회고를 다시 볼 수 있어요.');
+    return;
+  }
+
+  if (
+    user.awaitingConfessionReply &&
+    user.confessionPromptSentAt &&
+    now - new Date(user.confessionPromptSentAt) <= CONFESSION_REPLY_WINDOW_MINUTES * 60 * 1000
+  ) {
+    await handleConfessionReply(message, content);
     return;
   }
 
