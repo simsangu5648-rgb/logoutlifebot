@@ -592,6 +592,10 @@ const MONTHLY_CHALLENGE_REPLY_WINDOW_HOURS = parseInt(process.env.MONTHLY_CHALLE
 const MONTHLY_CHALLENGE_CHECKIN_CHANNEL_NAME =
   process.env.MONTHLY_CHALLENGE_CHECKIN_CHANNEL_NAME || "금딸챌린지-인증";
 const MONTHLY_CHALLENGE_CHECKIN_KEYWORD = process.env.MONTHLY_CHALLENGE_CHECKIN_KEYWORD || "로그아웃";
+// 인증 채널은 이 역할을 가진 사람만 글을 쓸 수 있도록 디스코드 채널 권한에서
+// 잠가뒀습니다(신청 안 한 사람이 글 쓰는 걸 막기 위함, sim님 요청 2026-09). 이번 달
+// 챌린지에 실제로 참가 중인 사람에게만 이 역할을 자동으로 부여/유지합니다.
+const MONTHLY_CHALLENGE_PARTICIPANT_ROLE_ID = process.env.MONTHLY_CHALLENGE_PARTICIPANT_ROLE_ID || null;
 // "재발"이라고만 짧게 답하면 그날 하루만 카운트에서 빠집니다 (지금까지 쌓은 날짜는 안 깎임).
 const MONTHLY_CHALLENGE_RELAPSE_PHRASES = ["재발", "!재발", "실패", "무너졌어요", "무너졌어"];
 // 서버 부스트/역할 계층/봇 권한이 아직 준비 안 됐을 수 있어서 기본은 꺼둡니다.
@@ -632,6 +636,18 @@ function computeRankTierIndex(completedMonthsTotal) {
 
 function currentMonthKeyKST() {
   return todayKST().slice(0, 7);
+}
+
+// ── 인증 채널 쓰기 권한용 역할 부여: env가 비어있으면 조용히 건너뜁니다 ─────
+async function grantMonthlyChallengeParticipantRole(discordUserId) {
+  if (!MONTHLY_CHALLENGE_PARTICIPANT_ROLE_ID) return;
+  const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
+  if (!guild) return;
+  const member = await guild.members.fetch(discordUserId).catch(() => null);
+  if (!member || member.roles.cache.has(MONTHLY_CHALLENGE_PARTICIPANT_ROLE_ID)) return;
+  await member.roles.add(MONTHLY_CHALLENGE_PARTICIPANT_ROLE_ID).catch((e) =>
+    console.error("[매달챌린지 참가자 역할 부여 실패]", e)
+  );
 }
 
 // ── 참가 명령어: !금딸챌린지 (DM) ────────────────────────────────────────
@@ -683,6 +699,10 @@ async function handleMonthlyChallengeJoin(message) {
       completedAt: null,
     },
   });
+
+  await grantMonthlyChallengeParticipantRole(discordUserId).catch((e) =>
+    console.error("[매달챌린지 참가자 역할 부여 오류]", e)
+  );
 
   await message.reply(
     `🔥 ${targetMonthKey} 챌린지 신청 완료! ${targetMonthKey} 1일부터 자동으로 시작돼서, 매일 저녁 9시쯤 "오늘 하루 어떠셨어요?"라고 물어볼게요.\n` +
@@ -977,6 +997,11 @@ async function runMonthlyChallengeRolloverJob() {
         completedAt: null,
       },
     });
+    // 인증 채널 쓰기 권한 역할을 혹시 못 받은 기존 참가자가 있다면 여기서 보정합니다
+    // (역할이 이 기능 추가 전부터 참가 중이었거나, 신청 시점에 부여가 실패했던 경우 대비).
+    await grantMonthlyChallengeParticipantRole(id).catch((e) =>
+      console.error("[매달챌린지 참가자 역할 보정 오류]", e)
+    );
   }
 
   const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
