@@ -7,7 +7,6 @@ const {
   GatewayIntentBits,
   Partials,
   Events,
-  ChannelType,
   PermissionFlagsBits,
   AttachmentBuilder,
 } = require("discord.js");
@@ -35,7 +34,6 @@ const {
 const {
   DISCORD_TOKEN,
   GUILD_ID,
-  ROLE_ID_REBOOT,
   ROLE_ID_GROW,
   ROLE_ID_MASTER,
   THRESHOLD_MASTER,
@@ -1119,7 +1117,7 @@ function scheduleMonthlyChallengeJobs() {
     { timezone: TZ }
   );
   console.log(
-    `[예약 등록] 매달챌린지 cron: 저녁 "${MONTHLY_CHALLENGE_PROMPT_CRON}" / 리마인더 "${MONTHLY_CHALLENGE_REMINDER_CRON}" / 월간갱신 "${MONTHLY_CHALLENGE_ROLLOVER_CRON}" (${TZ})`
+    `[예약 등록] 매달챌린지 cron: 저녁 "${MONTHLY_CHALLENGE_PROMPT_CRON}" / 모집 "${MONTHLY_CHALLENGE_RECRUIT_CRON}" / 리마인더 "${MONTHLY_CHALLENGE_REMINDER_CRON}" / 월간갱신 "${MONTHLY_CHALLENGE_ROLLOVER_CRON}" (${TZ})`
   );
 }
 
