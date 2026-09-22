@@ -598,6 +598,23 @@ const MONTHLY_CHALLENGE_CHECKIN_KEYWORD = process.env.MONTHLY_CHALLENGE_CHECKIN_
 const MONTHLY_CHALLENGE_PARTICIPANT_ROLE_ID = process.env.MONTHLY_CHALLENGE_PARTICIPANT_ROLE_ID || null;
 // "재발"이라고만 짧게 답하면 그날 하루만 카운트에서 빠집니다 (지금까지 쌓은 날짜는 안 깎임).
 const MONTHLY_CHALLENGE_RELAPSE_PHRASES = ["재발", "!재발", "실패", "무너졌어요", "무너졌어"];
+// ── 신규 참가자 모집 DM (sim님 요청, 2026-09) ──────────────────────────────
+// 아직 신청 안 한 멤버에게만, 매달 마지막 주(신청 창구가 열리는 시점)에 먼저 DM으로
+// "다음 달 신청하시겠어요?"라고 물어봅니다. 이미 참가 중인 사람은 자동으로 다음
+// 달도 이어지므로 제외됩니다. "네"류 답장을 받으면 "신청"이라고 보내달라고 한 번
+// 더 확인하고, 실제로 "신청"이 오면 기존 !금딸챌린지 참가 로직을 그대로 재사용합니다.
+const MONTHLY_CHALLENGE_RECRUIT_CRON = process.env.MONTHLY_CHALLENGE_RECRUIT_CRON || "0 21 25 * *"; // 매달 25일 21시
+const MONTHLY_CHALLENGE_RECRUIT_REPLY_WINDOW_HOURS = parseInt(
+  process.env.MONTHLY_CHALLENGE_RECRUIT_REPLY_WINDOW_HOURS || "72",
+  10
+);
+const MONTHLY_CHALLENGE_RECRUIT_YES_PHRASES = [
+  "네", "넹", "넵", "예", "웅", "응", "좋아요", "좋아", "할래요", "할게요",
+  "하겠습니다", "하겠어요", "해볼게요", "해볼래요", "신청할게요", "신청할래요", "콜", "ok", "okay", "오케이",
+];
+const MONTHLY_CHALLENGE_RECRUIT_NO_PHRASES = [
+  "아니요", "아니", "안할래요", "안해요", "괜찮아요", "패스", "다음에요", "다음에", "no",
+];
 // 서버 부스트/역할 계층/봇 권한이 아직 준비 안 됐을 수 있어서 기본은 꺼둡니다.
 // Railway에 MONTHLY_CHALLENGE_NICKNAME_TAG_ENABLED=true를 넣으면 켜집니다.
 const MONTHLY_CHALLENGE_NICKNAME_TAG_ENABLED = process.env.MONTHLY_CHALLENGE_NICKNAME_TAG_ENABLED === "true";
@@ -827,6 +844,46 @@ async function handleMonthlyChallengeCheckinReply(message, content) {
 
 // ── 인증 채널 체크인: #금딸챌린지-인증에 정해진 키워드("로그아웃")만 올리면 ─────
 // DM 질문(awaitingCheckinReply)을 기다리지 않고 바로 체크인됩니다. 참가자가
+// ── 신규 참가자 모집 DM 답장 처리 (handlePendingDmReply에서 체크인 답장 다음 우선순위) ─
+// "asked" 단계: "네"류 답장이면 "confirmed"로 넘어가서 "신청"이라고 보내달라고 안내.
+// "confirmed" 단계: "신청"이 오면 기존 참가 로직(handleMonthlyChallengeJoin)을 그대로 호출.
+async function handleMonthlyChallengeRecruitReply(message, content) {
+  const discordUserId = message.author.id;
+  const user = getUser(discordUserId);
+  const recruit = user.monthlyChallengeRecruit;
+  if (!recruit || !recruit.promptSentAt) return false;
+
+  const now = new Date();
+  if (now - new Date(recruit.promptSentAt) > MONTHLY_CHALLENGE_RECRUIT_REPLY_WINDOW_HOURS * 60 * 60 * 1000) {
+    updateUser(discordUserId, { monthlyChallengeRecruit: null });
+    return false;
+  }
+
+  const trimmed = content.trim();
+
+  if (recruit.stage === "confirmed") {
+    if (trimmed !== "신청" && !trimmed.startsWith("신청")) return false;
+    updateUser(discordUserId, { monthlyChallengeRecruit: null });
+    await handleMonthlyChallengeJoin(message);
+    return true;
+  }
+
+  // stage === "asked"
+  if (MONTHLY_CHALLENGE_RECRUIT_YES_PHRASES.includes(trimmed)) {
+    updateUser(discordUserId, {
+      monthlyChallengeRecruit: { ...recruit, stage: "confirmed" },
+    });
+    await message.reply('좋아요! "신청"이라고 보내주시면 바로 등록해드릴게요 🙌');
+    return true;
+  }
+  if (MONTHLY_CHALLENGE_RECRUIT_NO_PHRASES.includes(trimmed)) {
+    updateUser(discordUserId, { monthlyChallengeRecruit: null });
+    await message.reply(`알겠어요! 마음 바뀌면 매달 마지막 주에 언제든 "${MONTHLY_CHALLENGE_COMMAND}"라고 보내주세요 🙂`);
+    return true;
+  }
+  return false; // 관련 없는 답장이면 그냥 지나감 (다른 DM 흐름을 방해하지 않음)
+}
+
 // 원하는 시간에 채널에 와서 한 줄 남기는 방식이라, DM 저녁 질문 타이밍과
 // 무관하게 동작해야 하기 때문입니다. 재발 보고는 여기서 다루지 않고 DM
 // 전용으로 남겨둡니다(공개 채널에 실패 내용이 노출되지 않도록).
@@ -1014,10 +1071,41 @@ async function runMonthlyChallengeRolloverJob() {
   }
 }
 
+// ── 신규 참가자 모집 DM 발송: 매달 마지막 주 초입(기본 25일 저녁)에, 아직 신청
+// 안 한 멤버에게만 "다음 달 신청하시겠어요?"라고 먼저 물어봅니다. 이미 참가
+// 중인 사람은 자동으로 다음 달도 이어지므로 제외합니다(sim님 요청, 2026-09).
+async function runMonthlyChallengeRecruitJob() {
+  const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
+  if (!guild) return;
+  const members = await guild.members.fetch().catch(() => null);
+  if (!members) return;
+
+  const targetMonthKey = nextMonthKey(currentMonthKeyKST());
+
+  for (const member of members.values()) {
+    if (member.user.bot) continue;
+    const user = getUser(member.id);
+    if (user.monthlyChallenge && user.monthlyChallenge.active) continue; // 이미 참가 중 - 자동으로 이어짐
+
+    updateUser(member.id, {
+      monthlyChallengeRecruit: { promptSentAt: new Date().toISOString(), stage: "asked" },
+    });
+    await safeDM(
+      member,
+      `다음 달(${targetMonthKey}) 금딸챌린지 신청하시겠어요? 신청하고 싶으시면 편하게 답장 주세요 🙂`
+    ).catch((e) => console.error("[매달챌린지 모집 DM 실패]", e));
+  }
+}
+
 function scheduleMonthlyChallengeJobs() {
   cron.schedule(
     MONTHLY_CHALLENGE_PROMPT_CRON,
     () => runMonthlyChallengeEveningJob().catch((e) => console.error("[매달챌린지 저녁잡 오류]", e)),
+    { timezone: TZ }
+  );
+  cron.schedule(
+    MONTHLY_CHALLENGE_RECRUIT_CRON,
+    () => runMonthlyChallengeRecruitJob().catch((e) => console.error("[매달챌린지 모집 오류]", e)),
     { timezone: TZ }
   );
   cron.schedule(
@@ -1593,6 +1681,13 @@ async function handlePendingDmReply(message, content) {
     return false;
   });
   if (handledByMonthlyChallenge) return;
+
+  // 신규 참가자 모집 DM("다음 달 신청하시겠어요?")에 대한 답장도 다른 파싱보다 먼저 확인합니다.
+  const handledByMonthlyChallengeRecruit = await handleMonthlyChallengeRecruitReply(message, content).catch((e) => {
+    console.error("[매달챌린지 모집 답장 처리 오류]", e);
+    return false;
+  });
+  if (handledByMonthlyChallengeRecruit) return;
 
   const user = getUser(message.author.id);
   const now = new Date();
