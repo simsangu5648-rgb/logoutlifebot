@@ -37,7 +37,6 @@ const {
   ROLE_ID_GROW,
   ROLE_ID_MASTER,
   THRESHOLD_MASTER,
-  PAYMENT_LINK,
   DAILY_CRON,
   TIMEZONE,
 } = process.env;
@@ -334,8 +333,8 @@ const CONVO_STARTER_HIGH = [
 ];
 
 const CONVO_STARTER_CHANNEL_NAME = process.env.CONVO_STARTER_CHANNEL_NAME || "자유수다";
-// 기본: 월/수/금 오전 11시 (주 3회) — 필요하면 Railway 환경변수로 횟수/요일 조정 가능.
-const CONVO_STARTER_CRON = process.env.CONVO_STARTER_CRON || "0 11 * * 1,3,5";
+// 기본: 월/수/금 오후 1시 (주 3회) — 필요하면 Railway 환경변수로 횟수/요일 조정 가능.
+const CONVO_STARTER_CRON = process.env.CONVO_STARTER_CRON || "0 13 * * 1,3,5";
 
 function todayKST() {
   // YYYY-MM-DD, TZ 기준
@@ -584,12 +583,16 @@ const MONTHLY_CHALLENGE_PROMPT_CRON = process.env.MONTHLY_CHALLENGE_PROMPT_CRON 
 const MONTHLY_CHALLENGE_REMINDER_CRON = process.env.MONTHLY_CHALLENGE_REMINDER_CRON || "30 22 * * *"; // 매일 22시30분 리마인더
 const MONTHLY_CHALLENGE_ROLLOVER_CRON = process.env.MONTHLY_CHALLENGE_ROLLOVER_CRON || "5 0 1 * *"; // 매달 1일 00:05
 const MONTHLY_CHALLENGE_REPLY_WINDOW_HOURS = parseInt(process.env.MONTHLY_CHALLENGE_REPLY_WINDOW_HOURS || "24", 10);
-// 인증 채널(공개) — 참가자가 이 채널에 지정 키워드만 올리면 DM 답장 없이도 자동
-// 체크인됩니다. DM 답장(기존 방식)은 그대로 병행되고, 이건 추가 경로일 뿐입니다.
-// 재발/실패 내용은 여기 안 올리고 DM으로만 보고합니다 (사생활 보호, sim님 요청 2026-09).
+// 인증 채널(공개) — 참가자가 이 채널에 "n일차"로 시작하는 글(예: "15일차",
+// "15일차 오늘도 버텼다")만 올리면 DM 답장 없이도 자동 체크인됩니다. 예전엔 고정
+// 키워드("로그아웃")만 올려야 했지만, 몇 마디 자유롭게 덧붙일 수 있게 바꿨습니다
+// (sim님 요청 2026-09). 실제로 몇 일차인지 숫자를 검증하지는 않고, 그냥 "숫자+일차"
+// 형식이기만 하면 인정합니다. DM 답장(기존 방식)은 그대로 병행되고, 이건 추가 경로일
+// 뿐입니다. 재발/실패 내용은 여기 안 올리고 DM으로만 보고합니다 (사생활 보호, sim님 요청 2026-09).
 const MONTHLY_CHALLENGE_CHECKIN_CHANNEL_NAME =
   process.env.MONTHLY_CHALLENGE_CHECKIN_CHANNEL_NAME || "금딸챌린지-인증";
-const MONTHLY_CHALLENGE_CHECKIN_KEYWORD = process.env.MONTHLY_CHALLENGE_CHECKIN_KEYWORD || "로그아웃";
+const MONTHLY_CHALLENGE_CHECKIN_PATTERN = /^\d+\s*일차/;
+const MONTHLY_CHALLENGE_CHECKIN_EXAMPLE = "15일차";
 // 인증 채널은 이 역할을 가진 사람만 글을 쓸 수 있도록 디스코드 채널 권한에서
 // 잠가뒀습니다(신청 안 한 사람이 글 쓰는 걸 막기 위함, sim님 요청 2026-09). 이번 달
 // 챌린지에 실제로 참가 중인 사람에게만 이 역할을 자동으로 부여/유지합니다.
@@ -647,6 +650,22 @@ function computeRankTierIndex(completedMonthsTotal) {
     if (completedMonthsTotal >= RANK_LADDER[i].threshold) idx = i;
   }
   return idx;
+}
+
+// ── 매달챌린지 직급 등급 진행률 문구 (DM "!기록"에서 사용) ────────────────
+function describeRankLadderProgress(mc) {
+  const completed = (mc && mc.completedMonthsTotal) || 0;
+  const idx = mc && mc.rankTierIndex ? mc.rankTierIndex : 0;
+  const tier = RANK_LADDER[idx] || RANK_LADDER[0];
+  const next = RANK_LADDER[idx + 1];
+  if (!mc || !mc.active) {
+    return `🏅 직급 등급: ${tier.name} (누적 완주 ${completed}개월)\n매달 마지막 주에 "${MONTHLY_CHALLENGE_COMMAND}"라고 보내시면 다음 달 챌린지부터 시작할 수 있어요.`;
+  }
+  if (!next) {
+    return `🏅 직급 등급: ${tier.name} (누적 완주 ${completed}개월) — 최고 등급이에요!`;
+  }
+  const remaining = next.threshold - completed;
+  return `🏅 직급 등급: ${tier.name} (누적 완주 ${completed}개월)\n다음 등급 "${next.name}"까지 ${remaining}개월 남았어요.`;
 }
 
 function currentMonthKeyKST() {
@@ -721,7 +740,7 @@ async function handleMonthlyChallengeJoin(message) {
 
   await message.reply(
     `🔥 ${targetMonthKey} 챌린지 신청 완료! ${targetMonthKey} 1일부터 자동으로 시작돼서, 매일 저녁 9시쯤 "오늘 하루 어떠셨어요?"라고 물어볼게요.\n` +
-      `#${MONTHLY_CHALLENGE_CHECKIN_CHANNEL_NAME} 채널에 "${MONTHLY_CHALLENGE_CHECKIN_KEYWORD}"라고 한 줄만 남기셔도 되고, 이 DM에 아무 답장이나 주셔도 성공한 날로 기록돼요. 재발했으면 그냥 "재발"이라고 편하게 보내주세요 — 그래도 지금까지 쌓은 날짜는 절대 안 사라져요.\n` +
+      `#${MONTHLY_CHALLENGE_CHECKIN_CHANNEL_NAME} 채널에 "${MONTHLY_CHALLENGE_CHECKIN_EXAMPLE}"처럼 숫자+일차로 시작하는 글을 남기셔도 되고(뒤에 하고 싶은 말 자유롭게 붙이셔도 돼요), 이 DM에 아무 답장이나 주셔도 성공한 날로 기록돼요. 재발했으면 그냥 "재발"이라고 편하게 보내주세요 — 그래도 지금까지 쌓은 날짜는 절대 안 사라져요.\n` +
       `"${MONTHLY_CHALLENGE_STATUS_COMMAND}"라고 보내시면 언제든 진행 상황을 볼 수 있어요.`
   );
 }
@@ -840,7 +859,7 @@ async function handleMonthlyChallengeCheckinReply(message, content) {
   return true;
 }
 
-// ── 인증 채널 체크인: #금딸챌린지-인증에 정해진 키워드("로그아웃")만 올리면 ─────
+// ── 인증 채널 체크인: #금딸챌린지-인증에 "n일차"로 시작하는 글을 올리면 ─────
 // DM 질문(awaitingCheckinReply)을 기다리지 않고 바로 체크인됩니다. 참가자가
 // ── 신규 참가자 모집 DM 답장 처리 (handlePendingDmReply에서 체크인 답장 다음 우선순위) ─
 // "asked" 단계: "네"류 답장이면 "confirmed"로 넘어가서 "신청"이라고 보내달라고 안내.
@@ -1002,7 +1021,7 @@ async function runMonthlyChallengeEveningJob() {
 
     await safeDM(
       member,
-      `오늘 하루 어떠셨어요? #${MONTHLY_CHALLENGE_CHECKIN_CHANNEL_NAME}에 "${MONTHLY_CHALLENGE_CHECKIN_KEYWORD}"라고 남기셔도 되고, 이 DM에 아무 답장이나 주셔도 성공한 날로 기록돼요. 재발했으면 "재발"이라고 편하게 보내주세요.`
+      `오늘 하루 어떠셨어요? #${MONTHLY_CHALLENGE_CHECKIN_CHANNEL_NAME}에 "${MONTHLY_CHALLENGE_CHECKIN_EXAMPLE}"처럼 숫자+일차로 남기셔도 되고(뒤에 하고 싶은 말 자유롭게 붙이셔도 돼요), 이 DM에 아무 답장이나 주셔도 성공한 날로 기록돼요. 재발했으면 "재발"이라고 편하게 보내주세요.`
     );
     const fresh = getUser(member.id).monthlyChallenge;
     updateUser(member.id, {
@@ -1400,12 +1419,12 @@ client.on(Events.MessageCreate, async (message) => {
       return;
     }
 
-    // 매달 30일 챌린지 인증 채널: 지정 키워드("로그아웃")만 올리면 DM 답장 없이도
+    // 매달 30일 챌린지 인증 채널: "n일차"로 시작하는 글만 올리면 DM 답장 없이도
     // 바로 체크인됩니다. 아래 일반 체크인 로직(서버 어느 채널이든 2자 이상이면 인정)도
     // 그대로 같이 적용되므로 리액션이 두 개(🔒 + ✅) 붙을 수 있는데, 의도된 동작입니다.
     if (
       message.channel.name === MONTHLY_CHALLENGE_CHECKIN_CHANNEL_NAME &&
-      message.content.trim() === MONTHLY_CHALLENGE_CHECKIN_KEYWORD
+      MONTHLY_CHALLENGE_CHECKIN_PATTERN.test(message.content.trim())
     ) {
       await handleMonthlyChallengeChannelCheckin(message).catch((e) =>
         console.error("[매달챌린지 채널 체크인 오류]", e)
@@ -1736,7 +1755,8 @@ async function handleStreakRequest(message) {
     `📊 **${message.author.username}**님의 기록\n` +
       `누적 인증: ${user.cumulativeCount}회\n` +
       `현재 등급: ${describeCurrentLevel(member, user)}\n` +
-      `${describeNextLevelProgress(member, user)}\n` +
+      `${describeNextLevelProgress(member, user)}\n\n` +
+      `${describeRankLadderProgress(user.monthlyChallenge)}\n\n` +
       `현재 연속: ${user.currentStreak || 0}일 🔥\n` +
       `최고 기록: ${user.longestStreak || 0}일\n` +
       `이번 달: ${thisMonthCount}회\n` +
@@ -2614,7 +2634,8 @@ client.on(Events.MessageReactionRemove, async (reaction, reactUser) => {
   }
 });
 
-// ── 매일 정기 점검: 온보딩 미션 + 미기록 독려 + 월간 리포트 + 결제전환 DM ──
+// ── 매일 정기 점검: 온보딩 미션 + 미기록 독려 + 월간 리포트 ──
+// (결제전환 DM(D+25/32/40) 시퀀스는 sim님 요청으로 삭제했습니다, 2026-09)
 function scheduleDailyJob() {
   const expr = DAILY_CRON || "0 9 * * *";
   cron.schedule(expr, () => runDailyJob().catch((e) => console.error("[dailyJob 오류]", e)), { timezone: TZ });
@@ -2679,37 +2700,6 @@ async function runDailyJob() {
         }
         updateUser(member.id, { lastMonthlyReportMonth: monthKey });
       }
-    }
-
-    // 4) 결제전환 시퀀스 (D+25/32/40) - 아직 전자책을 구매하지 않은 사람만
-    // 예전엔 D+25/27/29/30로 뒤로 갈수록 간격(2일→2일→1일)이 좁아져서 점점
-    // 재촉하는 느낌을 줬습니다. 지금은 7일/8일 간격으로 고르게 벌렸고, "가입 N일
-    // 축하" 같은 감정 표현과 구매 안내를 한 문장에 묶지 않도록 정리했습니다.
-    if (user.ebookPurchased) continue;
-    if (!member.joinedAt) continue;
-
-    const daysSinceJoin = daysBetween(member.joinedAt, now);
-
-    if (daysSinceJoin === 25 && !user.dmFlags.d25) {
-      await safeDM(
-        member,
-        `지금까지 쌓은 기록을 정리해봤어요.\n누적 인증 ${user.cumulativeCount}회, 현재 등급: ${describeCurrentLevel(member, user)}.\n${describeNextLevelProgress(member, user)}\n꾸준히 잘 해오고 계세요!`
-      );
-      markDmSent(member.id, "d25");
-    } else if (daysSinceJoin === 32 && !user.dmFlags.d32) {
-      await safeDM(
-        member,
-        `전자책을 구매하면 바로 리부트-크루로 승급되고, 전자책·워크북을 바로 받아보실 수 있어요. DM으로 "구매"라고 보내시면 구매 링크를 받아보실 수 있어요. 지금까지의 기록이 아깝지 않게, 한번 둘러보세요.`
-      );
-      markDmSent(member.id, "d32");
-    } else if (daysSinceJoin === 40 && !user.dmFlags.d40) {
-      await safeDM(
-        member,
-        `지금까지 누적 인증 ${user.cumulativeCount}회, 현재 등급: ${describeCurrentLevel(member, user)}.\n` +
-          `여기까지 꾸준히 잘 오셨어요. 리부트-크루로 승급하면 전자책·워크북을 바로 받아보실 수 있으니, 아직이시라면 한번 살펴보세요.` +
-          (PAYMENT_LINK ? `\n더 알아보기 👉 ${PAYMENT_LINK}` : "")
-      );
-      markDmSent(member.id, "d40");
     }
   }
 }
@@ -3186,6 +3176,22 @@ async function finalizeRebootCompletion(discordUserId, member) {
       }
       const rc2 = getUser(discordUserId).rebootChallenge;
       updateUser(discordUserId, { rebootChallenge: { ...rc2, masterCrewGrantedAt: new Date().toISOString() } });
+
+      // [신규 2026-09, sim님 요청] 30일 리부트 챌린지도 "30일을 해낸" 건 매달챌린지와
+      // 똑같으므로, 매달챌린지 누적 완주 개월에도 +1 크레딧을 줍니다. 이 블록은
+      // masterCrewGrantedAt이 아직 없을 때 딱 한 번만 실행되므로(위 if문), 중복 적립되지
+      // 않습니다. 이렇게 하면 전자책 구매자가 리부트 챌린지만 하고 끝내는 게 아니라,
+      // 곧바로 직급 등급의 첫 단계(주임)까지 도달한 상태로 매달챌린지를 이어갈 수 있어서
+      // "또 30일을 처음부터 해야 하나"라는 동기 저하를 줄여줍니다.
+      await finalizeMonthlyChallengeCompletion(discordUserId, m).catch((e) =>
+        console.error("[리부트→매달챌린지 등급 브릿지 오류]", e)
+      );
+      if (m) {
+        await safeDM(
+          m,
+          `🎁 30일을 해내신 김에, 매달 30일 챌린지 쪽 직급 등급에도 완주 1개월로 인정해드렸어요. 매달 마지막 주에 "${MONTHLY_CHALLENGE_COMMAND}"라고 보내시면 다음 달부터 이어서 챌린지를 계속하면서 등급을 올릴 수 있어요.`
+        );
+      }
     }
 
     const rc3 = getUser(discordUserId).rebootChallenge;
