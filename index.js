@@ -366,6 +366,21 @@ function prevMonthKey(monthKey /* "YYYY-MM" */) {
   return `${py}-${pm}`;
 }
 
+function nextMonthKey(monthKey /* "YYYY-MM" */) {
+  const [y, m] = monthKey.split("-").map(Number);
+  const d = new Date(Date.UTC(y, m, 1)); // m은 1-indexed라 그대로 넣으면 다음달 1일 (UTC월은 0-indexed)
+  const ny = d.getUTCFullYear();
+  const nm = String(d.getUTCMonth() + 1).padStart(2, "0");
+  return `${ny}-${nm}`;
+}
+
+// 매달챌린지 신청 창구: "이번 달 마지막 주"에만 다음 달 챌린지 신청을 받습니다
+// (sim님 요청, 2026-09). 마지막 7일(말일 기준 -6일)을 "마지막 주"로 봅니다.
+function isLastWeekOfMonthKST(dateStr /* "YYYY-MM-DD" */) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  return d > daysInMonth(y, m) - 7;
+}
+
 // ISO 주차 문자열 (예: "2026-W34") - 주간 팁/회고 중복 발송 방지 및 콘텐츠 로테이션에 사용
 function isoWeekKey(date) {
   const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
@@ -614,24 +629,44 @@ function currentMonthKeyKST() {
 }
 
 // ── 참가 명령어: !금딸챌린지 (DM) ────────────────────────────────────────
+// 신청 창구는 "이번 달 마지막 주"에만 열려있고, 그 안에 신청하면 다음 달
+// 챌린지로 등록됩니다 (sim님 요청, 2026-09 — 아무 때나 중간 합류하던 방식에서
+// "매달 정해진 주에만 신청받는" 방식으로 변경). 이미 참가 중인 사람은 매달
+// 자동으로 이어지므로(러버 잡이 처리) 이 신청 창구는 새로 들어오는 사람 전용입니다.
 async function handleMonthlyChallengeJoin(message) {
   const discordUserId = message.author.id;
   const user = getUser(discordUserId);
   const mc = user.monthlyChallenge;
-  const monthKey = currentMonthKeyKST();
+  const today = todayKST();
+  const currentMonthKey = today.slice(0, 7);
 
-  if (mc.active && mc.monthKey === monthKey) {
+  if (mc.active && mc.monthKey >= currentMonthKey) {
+    if (mc.monthKey === currentMonthKey) {
+      await message.reply(
+        `이미 이번 달 챌린지 참가 중이에요! 지금까지 ${mc.successDays}/${MONTHLY_CHALLENGE_TARGET_DAYS}일 성공하셨어요.`
+      );
+    } else {
+      await message.reply(`이미 ${mc.monthKey} 챌린지 신청이 완료됐어요. ${mc.monthKey} 1일부터 자동으로 시작돼요.`);
+    }
+    return;
+  }
+
+  if (!isLastWeekOfMonthKST(today)) {
+    const [y, m] = today.split("-").map(Number);
+    const lastDay = daysInMonth(y, m);
+    const windowStart = lastDay - 6;
     await message.reply(
-      `이미 이번 달 챌린지 참가 중이에요! 지금까지 ${mc.successDays}/${MONTHLY_CHALLENGE_TARGET_DAYS}일 성공하셨어요. 매일 저녁 9시쯤 오늘 하루 어떠셨는지 물어볼게요.`
+      `다음 달 챌린지 신청은 매달 마지막 주(이번 달 기준 ${m}월 ${windowStart}일~${lastDay}일)에만 받아요. 그때 다시 "${MONTHLY_CHALLENGE_COMMAND}"라고 보내주세요!`
     );
     return;
   }
 
+  const targetMonthKey = nextMonthKey(currentMonthKey);
   updateUser(discordUserId, {
     monthlyChallenge: {
       ...mc,
       active: true,
-      monthKey,
+      monthKey: targetMonthKey,
       joinedAt: new Date().toISOString(),
       successDays: 0,
       lastCheckinDate: null,
@@ -644,7 +679,7 @@ async function handleMonthlyChallengeJoin(message) {
   });
 
   await message.reply(
-    `🔥 이번 달 챌린지 참가 완료! 오늘부터 매일 저녁 9시쯤 "오늘 하루 어떠셨어요?"라고 물어볼게요.\n` +
+    `🔥 ${targetMonthKey} 챌린지 신청 완료! ${targetMonthKey} 1일부터 자동으로 시작돼서, 매일 저녁 9시쯤 "오늘 하루 어떠셨어요?"라고 물어볼게요.\n` +
       `아무 답장이나 주시면 성공한 날로 기록돼요. 재발했으면 그냥 "재발"이라고 편하게 보내주세요 — 그래도 지금까지 쌓은 날짜는 절대 안 사라져요.\n` +
       `"${MONTHLY_CHALLENGE_STATUS_COMMAND}"라고 보내시면 언제든 진행 상황을 볼 수 있어요.`
   );
@@ -654,11 +689,24 @@ async function handleMonthlyChallengeJoin(message) {
 async function handleMonthlyChallengeStatus(message) {
   const user = getUser(message.author.id);
   const mc = user.monthlyChallenge;
+  const currentMonthKey = currentMonthKeyKST();
   if (!mc || !mc.active) {
-    await message.reply(`아직 이번 달 챌린지에 참가 안 하셨어요. "${MONTHLY_CHALLENGE_COMMAND}"라고 보내시면 바로 시작할 수 있어요.`);
+    await message.reply(
+      `아직 챌린지에 참가 안 하셨어요. 매달 마지막 주에 "${MONTHLY_CHALLENGE_COMMAND}"라고 보내시면 다음 달 챌린지로 신청할 수 있어요.`
+    );
     return;
   }
   const tier = RANK_LADDER[mc.rankTierIndex || 0];
+
+  if (mc.monthKey > currentMonthKey) {
+    await message.reply(
+      `📅 ${mc.monthKey} 챌린지 신청 완료 상태예요. ${mc.monthKey} 1일부터 자동으로 시작돼요.\n` +
+        `누적 완주 개월: ${mc.completedMonthsTotal || 0}회\n` +
+        `현재 등급: ${tier ? tier.name : "-"}`
+    );
+    return;
+  }
+
   await message.reply(
     `📅 이번 달(${mc.monthKey}) 챌린지 현황\n` +
       `성공 일수: ${mc.successDays}/${MONTHLY_CHALLENGE_TARGET_DAYS}일${mc.completedThisMonth ? " ✅ 완주!" : ""}\n` +
