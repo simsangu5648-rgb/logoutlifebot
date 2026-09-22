@@ -586,6 +586,12 @@ const MONTHLY_CHALLENGE_PROMPT_CRON = process.env.MONTHLY_CHALLENGE_PROMPT_CRON 
 const MONTHLY_CHALLENGE_REMINDER_CRON = process.env.MONTHLY_CHALLENGE_REMINDER_CRON || "30 22 * * *"; // 매일 22시30분 리마인더
 const MONTHLY_CHALLENGE_ROLLOVER_CRON = process.env.MONTHLY_CHALLENGE_ROLLOVER_CRON || "5 0 1 * *"; // 매달 1일 00:05
 const MONTHLY_CHALLENGE_REPLY_WINDOW_HOURS = parseInt(process.env.MONTHLY_CHALLENGE_REPLY_WINDOW_HOURS || "24", 10);
+// 인증 채널(공개) — 참가자가 이 채널에 지정 키워드만 올리면 DM 답장 없이도 자동
+// 체크인됩니다. DM 답장(기존 방식)은 그대로 병행되고, 이건 추가 경로일 뿐입니다.
+// 재발/실패 내용은 여기 안 올리고 DM으로만 보고합니다 (사생활 보호, sim님 요청 2026-09).
+const MONTHLY_CHALLENGE_CHECKIN_CHANNEL_NAME =
+  process.env.MONTHLY_CHALLENGE_CHECKIN_CHANNEL_NAME || "금딸챌린지-인증";
+const MONTHLY_CHALLENGE_CHECKIN_KEYWORD = process.env.MONTHLY_CHALLENGE_CHECKIN_KEYWORD || "로그아웃";
 // "재발"이라고만 짧게 답하면 그날 하루만 카운트에서 빠집니다 (지금까지 쌓은 날짜는 안 깎임).
 const MONTHLY_CHALLENGE_RELAPSE_PHRASES = ["재발", "!재발", "실패", "무너졌어요", "무너졌어"];
 // 서버 부스트/역할 계층/봇 권한이 아직 준비 안 됐을 수 있어서 기본은 꺼둡니다.
@@ -680,7 +686,7 @@ async function handleMonthlyChallengeJoin(message) {
 
   await message.reply(
     `🔥 ${targetMonthKey} 챌린지 신청 완료! ${targetMonthKey} 1일부터 자동으로 시작돼서, 매일 저녁 9시쯤 "오늘 하루 어떠셨어요?"라고 물어볼게요.\n` +
-      `아무 답장이나 주시면 성공한 날로 기록돼요. 재발했으면 그냥 "재발"이라고 편하게 보내주세요 — 그래도 지금까지 쌓은 날짜는 절대 안 사라져요.\n` +
+      `#${MONTHLY_CHALLENGE_CHECKIN_CHANNEL_NAME} 채널에 "${MONTHLY_CHALLENGE_CHECKIN_KEYWORD}"라고 한 줄만 남기셔도 되고, 이 DM에 아무 답장이나 주셔도 성공한 날로 기록돼요. 재발했으면 그냥 "재발"이라고 편하게 보내주세요 — 그래도 지금까지 쌓은 날짜는 절대 안 사라져요.\n` +
       `"${MONTHLY_CHALLENGE_STATUS_COMMAND}"라고 보내시면 언제든 진행 상황을 볼 수 있어요.`
   );
 }
@@ -799,6 +805,61 @@ async function handleMonthlyChallengeCheckinReply(message, content) {
   return true;
 }
 
+// ── 인증 채널 체크인: #금딸챌린지-인증에 정해진 키워드("로그아웃")만 올리면 ─────
+// DM 질문(awaitingCheckinReply)을 기다리지 않고 바로 체크인됩니다. 참가자가
+// 원하는 시간에 채널에 와서 한 줄 남기는 방식이라, DM 저녁 질문 타이밍과
+// 무관하게 동작해야 하기 때문입니다. 재발 보고는 여기서 다루지 않고 DM
+// 전용으로 남겨둡니다(공개 채널에 실패 내용이 노출되지 않도록).
+async function handleMonthlyChallengeChannelCheckin(message) {
+  const discordUserId = message.author.id;
+  const user = getUser(discordUserId);
+  const mc = user.monthlyChallenge;
+  const currentMonthKey = currentMonthKeyKST();
+  if (!mc || !mc.active || mc.monthKey !== currentMonthKey || mc.completedThisMonth) return false;
+
+  const today = todayKST();
+  if (mc.lastCheckinDate === today) return false; // DM이든 채널이든 하루 1회만 인정 (중복 방지)
+
+  const newSuccessDays = (mc.successDays || 0) + 1;
+  const justCompleted = !mc.completedThisMonth && newSuccessDays >= MONTHLY_CHALLENGE_TARGET_DAYS;
+
+  updateUser(discordUserId, {
+    monthlyChallenge: {
+      ...mc,
+      awaitingCheckinReply: false,
+      lastCheckinDate: today,
+      successDays: newSuccessDays,
+      completedThisMonth: justCompleted || mc.completedThisMonth,
+      completedAt: justCompleted ? new Date().toISOString() : mc.completedAt,
+    },
+  });
+
+  await safeReact(message, "🔒");
+
+  const label = message.member ? message.member.displayName : discordUserId;
+  appendMonthlyChallengeEvent({
+    discordUserId,
+    label,
+    monthKey: mc.monthKey,
+    successDays: newSuccessDays,
+    completed: justCompleted,
+    completedMonthsTotal: mc.completedMonthsTotal || 0,
+    crisisDetected: false,
+    relapse: false,
+  }).catch((e) => console.error("[매달챌린지 기록 오류]", e));
+
+  if (justCompleted) {
+    await safeDM(
+      message.author,
+      `🎉 ${newSuccessDays}/${MONTHLY_CHALLENGE_TARGET_DAYS}일 완주하셨어요! 이번 달 챌린지 완주예요, 정말 대단해요.`
+    );
+    await finalizeMonthlyChallengeCompletion(discordUserId, message.member || null).catch((e) =>
+      console.error("[매달챌린지 완주 처리 오류]", e)
+    );
+  }
+  return true;
+}
+
 // ── 등급 역할 적용: RANK_ROLE_ID_n이 .env에 없으면 조용히 건너뜁니다 ─────────
 async function applyRankNicknameTag(member, tierIndex) {
   const tier = RANK_LADDER[tierIndex];
@@ -862,10 +923,11 @@ async function runMonthlyChallengeEveningJob() {
     const mc = getUser(member.id).monthlyChallenge;
     if (!mc || !mc.active || mc.monthKey !== monthKey || mc.completedThisMonth) continue;
     if (mc.awaitingCheckinReply) continue; // 어제 질문에 아직 답 안 함 → 리마인더 잡이 챙김
+    if (mc.lastCheckinDate === todayKST()) continue; // 인증 채널에 먼저 남겨서 오늘자는 이미 체크됨
 
     await safeDM(
       member,
-      `오늘 하루 어떠셨어요? 아무 답장이나 주시면 성공한 날로 기록돼요. 재발했으면 "재발"이라고 편하게 보내주세요.`
+      `오늘 하루 어떠셨어요? #${MONTHLY_CHALLENGE_CHECKIN_CHANNEL_NAME}에 "${MONTHLY_CHALLENGE_CHECKIN_KEYWORD}"라고 남기셔도 되고, 이 DM에 아무 답장이나 주셔도 성공한 날로 기록돼요. 재발했으면 "재발"이라고 편하게 보내주세요.`
     );
     const fresh = getUser(member.id).monthlyChallenge;
     updateUser(member.id, {
@@ -1225,6 +1287,18 @@ client.on(Events.MessageCreate, async (message) => {
       }
       // SOS 채널은 체크인 집계 대상이 아니므로 여기서 종료
       return;
+    }
+
+    // 매달 30일 챌린지 인증 채널: 지정 키워드("로그아웃")만 올리면 DM 답장 없이도
+    // 바로 체크인됩니다. 아래 일반 체크인 로직(서버 어느 채널이든 2자 이상이면 인정)도
+    // 그대로 같이 적용되므로 리액션이 두 개(🔒 + ✅) 붙을 수 있는데, 의도된 동작입니다.
+    if (
+      message.channel.name === MONTHLY_CHALLENGE_CHECKIN_CHANNEL_NAME &&
+      message.content.trim() === MONTHLY_CHALLENGE_CHECKIN_KEYWORD
+    ) {
+      await handleMonthlyChallengeChannelCheckin(message).catch((e) =>
+        console.error("[매달챌린지 채널 체크인 오류]", e)
+      );
     }
 
     // 신규 멤버 첫 인사 알림: 자기소개/오늘의-기록에 첫 글을 남기면, 최근 활동한
