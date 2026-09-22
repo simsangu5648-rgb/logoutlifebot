@@ -21,11 +21,14 @@ const {
   markPaymentProcessed,
   nextConvoStarterIndex,
   nextConfessionResponseIndex,
+  recordConfessionRelay,
+  getConfessionRelayTarget,
 } = require("./lib/store");
 const {
   appendRebootEvent,
   appendSalesEvent,
   appendConfessionEvent,
+  appendMonthlyChallengeEvent,
   isConfigured: isSheetsConfigured,
 } = require("./lib/sheets");
 
@@ -496,7 +499,7 @@ async function handleConfessionStart(message) {
   });
   await message.reply(
     "여기 있어요. 무슨 얘기든 편하게 써주세요. 재발이든, 그냥 오늘 힘들었던 거든 다 괜찮아요.\n" +
-      "준비되시면 다음 메시지로 편하게 보내주시면 돼요 (사진만 보내셔도 괜찮아요)."
+      "준비되시면 다음 메시지로 편하게 보내주시면 돼요."
   );
 }
 
@@ -525,20 +528,376 @@ async function handleConfessionReply(message, content) {
   await message.reply(replyText);
 
   // 운영자에게 조용히 알림 (완전히 선택 사항인 후속 답장을 위함 - 의무 아님, 읽씹해도 무방).
-  // 위기 신호가 감지된 경우엔 상위 라우터의 checkCrisisKeywordsAndNotify가 이미 🚨 알림을
-  // 원문과 함께 보냈으니, 여기서 또 보내 중복 알림이 되지 않게 합니다.
-  if (!crisisDetected) {
-    notifyOwnerText(
-      `💬 고해성사 — <@${message.author.id}> (${message.author.username})\n` +
-        `"${content.slice(0, 500)}"`
-    ).catch((e) => console.error("[고해성사 운영자 알림 오류]", e));
-  }
+  // 이 알림 메시지에 그대로 Discord "답장"을 하면 작성자에게 자동으로 전달됩니다
+  // (handleConfessionRelayIfAny 참고) — 채널을 옮겨다닐 필요 없이 여기서 바로 답할 수 있어요.
+  // 위기 신호가 감지된 경우엔 상위 라우터의 checkCrisisKeywordsAndNotify가 별도로 🚨 원문
+  // 알림도 보내지만, 여기 알림도 함께 보내서 같은 자리에서 바로 답장(전달)할 수 있게 합니다.
+  notifyOwnerAboutConfession(
+    message.author.id,
+    `${crisisDetected ? "🆘" : "💬"} 고해성사 — <@${message.author.id}> (${message.author.username})\n` +
+      `"${content.slice(0, 500)}"\n\n(이 메시지에 그대로 답장하시면 전달돼요)`
+  ).catch((e) => console.error("[고해성사 운영자 알림 오류]", e));
 
   appendConfessionEvent({
     discordUserId: message.author.id,
     label: message.author.username,
     crisisDetected,
   }).catch((e) => console.error("[고해성사 기록 오류]", e));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// ── 매달 30일 챌린지 (금딸챌린지) ────────────────────────────────────────
+// 30일 리부트 챌린지(위)와는 완전히 별개의, 매달 1일부터 도는 공개 코호트
+// 이벤트입니다. 재발해도 스트릭을 0으로 되돌리지 않고 "이번 달 성공한 날 수"를
+// 누적으로만 카운트합니다 (sim님 요청, 2026-09).
+//
+// ⚠️ 디스코드 쪽(13개 등급 역할 생성, 봇 역할 계층, 닉네임 관리 권한)은 아직
+// 준비 전이라는 전제로 짰습니다. 아래 RANK_ROLE_ID_1~13, MONTHLY_CHALLENGE_
+// NICKNAME_TAG_ENABLED 환경변수를 하나도 안 넣어도 이 기능은 정상 동작하고,
+// 등급 부여·닉네임 태그 부분만 조용히 건너뜁니다. 나중에 디스코드에서 역할을
+// 만들고 Railway에 환경변수를 채워 넣으면, 코드 수정 없이 그 다음 승급부터
+// 바로 적용됩니다.
+//
+// ⚠️ 참고: 기획 초안에서는 이 등급 사다리를 기존 ROLE_ID_GROW/ROLE_ID_MASTER에
+// 매핑하는 안을 검토했지만, 실제 코드를 보니 그 두 역할은 이미 다른 용도로
+// 고정돼 있었습니다 (GROW=전자책 구매, MASTER=30일 리부트 챌린지 완주). 그래서
+// 이 등급 사다리는 기존 역할을 재사용하지 않고, 완전히 새로운 RANK_ROLE_ID_1~13
+// 역할 13개를 새로 만드는 걸로 바꿨습니다 — 기존 기능과 절대 안 겹칩니다.
+// ══════════════════════════════════════════════════════════════════════════
+const MONTHLY_CHALLENGE_COMMAND = process.env.MONTHLY_CHALLENGE_COMMAND || "!금딸챌린지";
+const MONTHLY_CHALLENGE_STATUS_COMMAND = process.env.MONTHLY_CHALLENGE_STATUS_COMMAND || "!금딸현황";
+const MONTHLY_CHALLENGE_TARGET_DAYS = parseInt(process.env.MONTHLY_CHALLENGE_TARGET_DAYS || "30", 10);
+const MONTHLY_CHALLENGE_PROMPT_CRON = process.env.MONTHLY_CHALLENGE_PROMPT_CRON || "0 21 * * *"; // 매일 21시 발송
+const MONTHLY_CHALLENGE_REMINDER_CRON = process.env.MONTHLY_CHALLENGE_REMINDER_CRON || "30 22 * * *"; // 매일 22시30분 리마인더
+const MONTHLY_CHALLENGE_ROLLOVER_CRON = process.env.MONTHLY_CHALLENGE_ROLLOVER_CRON || "5 0 1 * *"; // 매달 1일 00:05
+const MONTHLY_CHALLENGE_REPLY_WINDOW_HOURS = parseInt(process.env.MONTHLY_CHALLENGE_REPLY_WINDOW_HOURS || "24", 10);
+// "재발"이라고만 짧게 답하면 그날 하루만 카운트에서 빠집니다 (지금까지 쌓은 날짜는 안 깎임).
+const MONTHLY_CHALLENGE_RELAPSE_PHRASES = ["재발", "!재발", "실패", "무너졌어요", "무너졌어"];
+// 서버 부스트/역할 계층/봇 권한이 아직 준비 안 됐을 수 있어서 기본은 꺼둡니다.
+// Railway에 MONTHLY_CHALLENGE_NICKNAME_TAG_ENABLED=true를 넣으면 켜집니다.
+const MONTHLY_CHALLENGE_NICKNAME_TAG_ENABLED = process.env.MONTHLY_CHALLENGE_NICKNAME_TAG_ENABLED === "true";
+
+// 회사 직급 13단계 — 아래로 갈수록 사람이 몰리고 위로 갈수록 희소해지도록 간격을
+// 점점 벌렸습니다 (기획서 "5. 등급 시스템" 참고). threshold는 "누적 완주 개월 수".
+const RANK_LADDER = [
+  { name: "인턴(사원)", tag: "사원", threshold: 0, envKey: "RANK_ROLE_ID_1" },
+  { name: "주임", tag: "주임", threshold: 1, envKey: "RANK_ROLE_ID_2" },
+  { name: "대리", tag: "대리", threshold: 3, envKey: "RANK_ROLE_ID_3" },
+  { name: "과장", tag: "과장", threshold: 6, envKey: "RANK_ROLE_ID_4" },
+  { name: "차장", tag: "차장", threshold: 12, envKey: "RANK_ROLE_ID_5" },
+  { name: "부장", tag: "부장", threshold: 20, envKey: "RANK_ROLE_ID_6" },
+  { name: "이사", tag: "이사", threshold: 30, envKey: "RANK_ROLE_ID_7" },
+  { name: "상무", tag: "상무", threshold: 42, envKey: "RANK_ROLE_ID_8" },
+  { name: "전무", tag: "전무", threshold: 54, envKey: "RANK_ROLE_ID_9" },
+  { name: "부사장", tag: "부사장", threshold: 66, envKey: "RANK_ROLE_ID_10" },
+  { name: "사장", tag: "사장", threshold: 78, envKey: "RANK_ROLE_ID_11" },
+  { name: "부회장", tag: "부회장", threshold: 90, envKey: "RANK_ROLE_ID_12" },
+  { name: "회장", tag: "회장", threshold: 102, envKey: "RANK_ROLE_ID_13" },
+];
+
+function rankRoleId(tierIndex) {
+  const tier = RANK_LADDER[tierIndex];
+  if (!tier) return null;
+  return process.env[tier.envKey] || null;
+}
+
+function computeRankTierIndex(completedMonthsTotal) {
+  let idx = 0;
+  for (let i = 0; i < RANK_LADDER.length; i++) {
+    if (completedMonthsTotal >= RANK_LADDER[i].threshold) idx = i;
+  }
+  return idx;
+}
+
+function currentMonthKeyKST() {
+  return todayKST().slice(0, 7);
+}
+
+// ── 참가 명령어: !금딸챌린지 (DM) ────────────────────────────────────────
+async function handleMonthlyChallengeJoin(message) {
+  const discordUserId = message.author.id;
+  const user = getUser(discordUserId);
+  const mc = user.monthlyChallenge;
+  const monthKey = currentMonthKeyKST();
+
+  if (mc.active && mc.monthKey === monthKey) {
+    await message.reply(
+      `이미 이번 달 챌린지 참가 중이에요! 지금까지 ${mc.successDays}/${MONTHLY_CHALLENGE_TARGET_DAYS}일 성공하셨어요. 매일 저녁 9시쯤 오늘 하루 어떠셨는지 물어볼게요.`
+    );
+    return;
+  }
+
+  updateUser(discordUserId, {
+    monthlyChallenge: {
+      ...mc,
+      active: true,
+      monthKey,
+      joinedAt: new Date().toISOString(),
+      successDays: 0,
+      lastCheckinDate: null,
+      awaitingCheckinReply: false,
+      checkinPromptSentAt: null,
+      reminderSentToday: false,
+      completedThisMonth: false,
+      completedAt: null,
+    },
+  });
+
+  await message.reply(
+    `🔥 이번 달 챌린지 참가 완료! 오늘부터 매일 저녁 9시쯤 "오늘 하루 어떠셨어요?"라고 물어볼게요.\n` +
+      `아무 답장이나 주시면 성공한 날로 기록돼요. 재발했으면 그냥 "재발"이라고 편하게 보내주세요 — 그래도 지금까지 쌓은 날짜는 절대 안 사라져요.\n` +
+      `"${MONTHLY_CHALLENGE_STATUS_COMMAND}"라고 보내시면 언제든 진행 상황을 볼 수 있어요.`
+  );
+}
+
+// ── 현황 조회: !금딸현황 (DM) ────────────────────────────────────────────
+async function handleMonthlyChallengeStatus(message) {
+  const user = getUser(message.author.id);
+  const mc = user.monthlyChallenge;
+  if (!mc || !mc.active) {
+    await message.reply(`아직 이번 달 챌린지에 참가 안 하셨어요. "${MONTHLY_CHALLENGE_COMMAND}"라고 보내시면 바로 시작할 수 있어요.`);
+    return;
+  }
+  const tier = RANK_LADDER[mc.rankTierIndex || 0];
+  await message.reply(
+    `📅 이번 달(${mc.monthKey}) 챌린지 현황\n` +
+      `성공 일수: ${mc.successDays}/${MONTHLY_CHALLENGE_TARGET_DAYS}일${mc.completedThisMonth ? " ✅ 완주!" : ""}\n` +
+      `누적 완주 개월: ${mc.completedMonthsTotal || 0}회\n` +
+      `현재 등급: ${tier ? tier.name : "-"}`
+  );
+}
+
+// ── 참가자 DM 답장 처리 (handlePendingDmReply에서 최우선 호출) ─────────────
+async function handleMonthlyChallengeCheckinReply(message, content) {
+  const discordUserId = message.author.id;
+  const user = getUser(discordUserId);
+  const mc = user.monthlyChallenge;
+  if (!mc || !mc.awaitingCheckinReply || !mc.checkinPromptSentAt) return false;
+
+  const now = new Date();
+  if (now - new Date(mc.checkinPromptSentAt) > MONTHLY_CHALLENGE_REPLY_WINDOW_HOURS * 60 * 60 * 1000) return false;
+
+  const today = todayKST();
+  if (mc.lastCheckinDate === today) return false; // 오늘자는 이미 반영됨 (중복 방지)
+
+  const trimmed = content.trim();
+  const isRelapse = MONTHLY_CHALLENGE_RELAPSE_PHRASES.includes(trimmed);
+  const crisisDetected = !!detectCrisisLevel(content);
+
+  const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
+  const member = guild ? await guild.members.fetch(discordUserId).catch(() => null) : null;
+  const label = member ? member.displayName : discordUserId;
+
+  if (isRelapse) {
+    updateUser(discordUserId, {
+      monthlyChallenge: { ...mc, awaitingCheckinReply: false, lastCheckinDate: today },
+    });
+    await message.reply(
+      `오늘 하루만 카운트 안 될 뿐이에요. 지금까지 쌓은 ${mc.successDays}일은 그대로예요. 내일 다시 이어가요.${
+        crisisDetected ? CRISIS_HOTLINE_NOTE : ""
+      }`
+    );
+    appendMonthlyChallengeEvent({
+      discordUserId,
+      label,
+      monthKey: mc.monthKey,
+      successDays: mc.successDays,
+      completed: false,
+      completedMonthsTotal: mc.completedMonthsTotal || 0,
+      crisisDetected,
+      relapse: true,
+    }).catch((e) => console.error("[매달챌린지 기록 오류]", e));
+    return true;
+  }
+
+  const newSuccessDays = (mc.successDays || 0) + 1;
+  const justCompleted = !mc.completedThisMonth && newSuccessDays >= MONTHLY_CHALLENGE_TARGET_DAYS;
+
+  updateUser(discordUserId, {
+    monthlyChallenge: {
+      ...mc,
+      awaitingCheckinReply: false,
+      lastCheckinDate: today,
+      successDays: newSuccessDays,
+      completedThisMonth: justCompleted || mc.completedThisMonth,
+      completedAt: justCompleted ? new Date().toISOString() : mc.completedAt,
+    },
+  });
+
+  await message.reply(
+    justCompleted
+      ? `🎉 ${newSuccessDays}/${MONTHLY_CHALLENGE_TARGET_DAYS}일 완주하셨어요! 이번 달 챌린지 완주예요, 정말 대단해요.${
+          crisisDetected ? CRISIS_HOTLINE_NOTE : ""
+        }`
+      : `기록했어요. 지금 ${newSuccessDays}/${MONTHLY_CHALLENGE_TARGET_DAYS}일이에요.${crisisDetected ? CRISIS_HOTLINE_NOTE : ""}`
+  );
+
+  appendMonthlyChallengeEvent({
+    discordUserId,
+    label,
+    monthKey: mc.monthKey,
+    successDays: newSuccessDays,
+    completed: justCompleted,
+    completedMonthsTotal: mc.completedMonthsTotal || 0,
+    crisisDetected,
+    relapse: false,
+  }).catch((e) => console.error("[매달챌린지 기록 오류]", e));
+
+  if (justCompleted) {
+    await finalizeMonthlyChallengeCompletion(discordUserId, member).catch((e) =>
+      console.error("[매달챌린지 완주 처리 오류]", e)
+    );
+  }
+  return true;
+}
+
+// ── 등급 역할 적용: RANK_ROLE_ID_n이 .env에 없으면 조용히 건너뜁니다 ─────────
+async function applyRankNicknameTag(member, tierIndex) {
+  const tier = RANK_LADDER[tierIndex];
+  if (!tier || !member) return;
+  // 디스코드 정책상 서버 소유자 본인 닉네임은 봇이 못 바꿉니다 — 조용히 건너뜁니다.
+  if (member.id === member.guild.ownerId) return;
+  const base = (member.nickname || member.user.username).replace(/^\[[^\]]+\]\s*/, "");
+  const newNick = `[${tier.tag}] ${base}`.slice(0, 32);
+  await member.setNickname(newNick).catch((e) => console.error("[등급 닉네임 태그 적용 실패]", e));
+}
+
+async function applyRankRole(member, oldTierIndex, newTierIndex) {
+  const oldRoleId = rankRoleId(oldTierIndex);
+  const newRoleId = rankRoleId(newTierIndex);
+  if (oldRoleId && oldRoleId !== newRoleId && member.roles.cache.has(oldRoleId)) {
+    await member.roles.remove(oldRoleId).catch((e) => console.error("[등급 역할 제거 실패]", e));
+  }
+  if (newRoleId) {
+    await member.roles.add(newRoleId).catch((e) => console.error("[등급 역할 부여 실패]", e));
+  }
+  if (MONTHLY_CHALLENGE_NICKNAME_TAG_ENABLED) {
+    await applyRankNicknameTag(member, newTierIndex);
+  }
+}
+
+// ── 완료 처리: 누적 완주 개월 +1, 등급 재계산, 승급 시에만 역할/공지 ─────────
+async function finalizeMonthlyChallengeCompletion(discordUserId, member) {
+  const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
+  const m = member || (guild ? await guild.members.fetch(discordUserId).catch(() => null) : null);
+  const mc1 = getUser(discordUserId).monthlyChallenge;
+
+  const newCompletedMonthsTotal = (mc1.completedMonthsTotal || 0) + 1;
+  const oldTierIndex = mc1.rankTierIndex || 0;
+  const newTierIndex = computeRankTierIndex(newCompletedMonthsTotal);
+
+  updateUser(discordUserId, {
+    monthlyChallenge: {
+      ...getUser(discordUserId).monthlyChallenge,
+      completedMonthsTotal: newCompletedMonthsTotal,
+      rankTierIndex: newTierIndex,
+    },
+  });
+
+  if (newTierIndex > oldTierIndex && m) {
+    await applyRankRole(m, oldTierIndex, newTierIndex).catch((e) => console.error("[등급 역할 적용 오류]", e));
+    const tier = RANK_LADDER[newTierIndex];
+    await safeDM(m, `🎖️ 누적 완주 ${newCompletedMonthsTotal}회 달성으로 "${tier.name}"로 승급했어요!`);
+    if (guild) await announcePromotion(guild, m, tier.name);
+  }
+}
+
+// ── 저녁 9시: 오늘 하루 어땠는지 DM으로 물어봅니다 ────────────────────────
+async function runMonthlyChallengeEveningJob() {
+  const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
+  if (!guild) return;
+  const members = await guild.members.fetch();
+  const monthKey = currentMonthKeyKST();
+
+  for (const member of members.values()) {
+    if (member.user.bot) continue;
+    const mc = getUser(member.id).monthlyChallenge;
+    if (!mc || !mc.active || mc.monthKey !== monthKey || mc.completedThisMonth) continue;
+    if (mc.awaitingCheckinReply) continue; // 어제 질문에 아직 답 안 함 → 리마인더 잡이 챙김
+
+    await safeDM(
+      member,
+      `오늘 하루 어떠셨어요? 아무 답장이나 주시면 성공한 날로 기록돼요. 재발했으면 "재발"이라고 편하게 보내주세요.`
+    );
+    const fresh = getUser(member.id).monthlyChallenge;
+    updateUser(member.id, {
+      monthlyChallenge: { ...fresh, awaitingCheckinReply: true, checkinPromptSentAt: new Date().toISOString(), reminderSentToday: false },
+    });
+  }
+}
+
+// ── 22시 30분: 오늘 질문에 아직 답 안 한 사람에게 리마인더 1회 ─────────────
+async function runMonthlyChallengeReminderJob() {
+  const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
+  if (!guild) return;
+  const members = await guild.members.fetch();
+  const today = todayKST();
+
+  for (const member of members.values()) {
+    if (member.user.bot) continue;
+    const mc = getUser(member.id).monthlyChallenge;
+    if (!mc || !mc.active || !mc.awaitingCheckinReply || mc.reminderSentToday || !mc.checkinPromptSentAt) continue;
+    const sentDate = new Intl.DateTimeFormat("en-CA", { timeZone: TZ }).format(new Date(mc.checkinPromptSentAt));
+    if (sentDate !== today) continue;
+    await safeDM(member, "⏰ 오늘 이번 달 챌린지 체크인 아직 안 하셨어요. 짧게 아무 말이나 답장 주세요 🙂");
+    const fresh = getUser(member.id).monthlyChallenge;
+    updateUser(member.id, { monthlyChallenge: { ...fresh, reminderSentToday: true } });
+  }
+}
+
+// ── 매달 1일 00:05: 새 달로 갱신 + 공개 채널 공지 ───────────────────────────
+// 한 번 참가하면 매달 자동으로 이어집니다(다시 !금딸챌린지를 안 쳐도 됨) — 이번 달
+// 진행도(successDays 등)만 새로 시작하고, completedMonthsTotal·등급은 그대로 유지됩니다.
+async function runMonthlyChallengeRolloverJob() {
+  const monthKey = currentMonthKeyKST();
+  const ids = allUserIds();
+  for (const id of ids) {
+    const mc = getUser(id).monthlyChallenge;
+    if (!mc || !mc.active || mc.monthKey === monthKey) continue;
+    updateUser(id, {
+      monthlyChallenge: {
+        ...mc,
+        monthKey,
+        successDays: 0,
+        lastCheckinDate: null,
+        awaitingCheckinReply: false,
+        checkinPromptSentAt: null,
+        reminderSentToday: false,
+        completedThisMonth: false,
+        completedAt: null,
+      },
+    });
+  }
+
+  const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
+  if (!guild) return;
+  const channel = findAnnounceChannel(guild);
+  if (channel) {
+    await channel
+      .send(`🔥 ${monthKey} 금딸챌린지가 시작됐어요! 아직 참가 안 하셨다면 봇 DM에 "${MONTHLY_CHALLENGE_COMMAND}"라고 보내보세요.`)
+      .catch((e) => console.error("[매달챌린지 공지 실패]", e));
+  }
+}
+
+function scheduleMonthlyChallengeJobs() {
+  cron.schedule(
+    MONTHLY_CHALLENGE_PROMPT_CRON,
+    () => runMonthlyChallengeEveningJob().catch((e) => console.error("[매달챌린지 저녁잡 오류]", e)),
+    { timezone: TZ }
+  );
+  cron.schedule(
+    MONTHLY_CHALLENGE_REMINDER_CRON,
+    () => runMonthlyChallengeReminderJob().catch((e) => console.error("[매달챌린지 리마인더 오류]", e)),
+    { timezone: TZ }
+  );
+  cron.schedule(
+    MONTHLY_CHALLENGE_ROLLOVER_CRON,
+    () => runMonthlyChallengeRolloverJob().catch((e) => console.error("[매달챌린지 월간갱신 오류]", e)),
+    { timezone: TZ }
+  );
+  console.log(
+    `[예약 등록] 매달챌린지 cron: 저녁 "${MONTHLY_CHALLENGE_PROMPT_CRON}" / 리마인더 "${MONTHLY_CHALLENGE_REMINDER_CRON}" / 월간갱신 "${MONTHLY_CHALLENGE_ROLLOVER_CRON}" (${TZ})`
+  );
 }
 
 // ── 데이 템플릿 ────────────────────────────────────────────────────────
@@ -642,6 +1001,52 @@ async function notifyOwnerText(text) {
   }
 }
 
+// 고해성사 알림 전용 — 보낸 메시지의 ID를 작성자 ID와 함께 저장해둬서, 운영자가
+// 이 알림에 Discord "답장" 기능으로 답하면 그대로 작성자에게 전달할 수 있게 합니다
+// (handleConfessionRelayIfAny 참고). notifyOwnerText는 다른 곳에서도 널리 쓰이는
+// 범용 함수라 그대로 두고, 이건 고해성사 전용으로 따로 뒀습니다.
+async function notifyOwnerAboutConfession(discordUserId, text) {
+  try {
+    const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
+    const owner = guild ? await guild.members.fetch(guild.ownerId).catch(() => null) : null;
+    if (!owner) {
+      console.error("[고해성사 운영자 알림] 서버 소유자를 찾지 못했습니다.");
+      return;
+    }
+    const sent = await owner.send(text);
+    recordConfessionRelay(sent.id, discordUserId);
+  } catch (e) {
+    console.error("[고해성사 운영자 알림 오류]", e);
+  }
+}
+
+// 운영자가 봇 DM에서 고해성사 알림 메시지에 "답장"으로 남긴 내용을, 그 알림이 가리키는
+// 작성자에게 그대로 전달합니다. 관련 없는 답장(다른 메시지에 대한 답장)이면 false를
+// 반환해서 호출부가 기존 명령어 처리 흐름을 그대로 이어가게 합니다.
+async function handleConfessionRelayIfAny(message, content) {
+  if (!message.reference || !message.reference.messageId) return false;
+  const targetUserId = getConfessionRelayTarget(message.reference.messageId);
+  if (!targetUserId) return false;
+
+  try {
+    const targetUser = await client.users.fetch(targetUserId).catch(() => null);
+    if (!targetUser) {
+      await message.reply("전달하려던 상대를 더 이상 찾을 수 없어요 (서버를 나갔을 수 있어요).");
+      return true;
+    }
+    const attachmentUrls = [...message.attachments.values()].map((a) => a.url);
+    await targetUser.send({
+      content: content ? `💬 sim님이 답장을 남겼어요:\n\n${content}` : "💬 sim님이 답장을 남겼어요:",
+      files: attachmentUrls,
+    });
+    await message.reply("전달했어요 🙂");
+  } catch (e) {
+    console.error("[고해성사 답장 전달 오류]", e);
+    await message.reply("전달하다가 오류가 났어요. 다시 한 번 답장해보시겠어요?");
+  }
+  return true;
+}
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -665,6 +1070,7 @@ client.once(Events.ClientReady, (c) => {
   scheduleWeeklyTipJob();
   scheduleInsightReminderJob();
   scheduleRebootChallengeJobs();
+  scheduleMonthlyChallengeJobs();
   scheduleConvoStarterJob();
 });
 
@@ -682,6 +1088,14 @@ client.on(Events.MessageCreate, async (message) => {
 
       // 안전 알림: 위기 신호 키워드는 어떤 명령어와 매칭되든 상관없이 항상 감지합니다.
       await checkCrisisKeywordsAndNotify(message, content).catch((e) => console.error("[안전 알림 오류]", e));
+
+      // 고해성사 답장 릴레이: 운영자가 고해성사 알림 메시지에 "답장"했다면, 다른 명령어
+      // 매칭보다 먼저 처리해서 그대로 작성자에게 전달합니다.
+      const relayed = await handleConfessionRelayIfAny(message, content).catch((e) => {
+        console.error("[고해성사 답장 전달 오류]", e);
+        return false;
+      });
+      if (relayed) return;
 
       if (content === "알림끄기" || content === "!알림끄기") {
         updateUser(message.author.id, { publicAnnounceOptOut: true });
@@ -731,6 +1145,10 @@ client.on(Events.MessageCreate, async (message) => {
         await handleStreakRequest(message);
       } else if (content === "고해성사" || content === CONFESSION_COMMAND) {
         await handleConfessionStart(message);
+      } else if (content === MONTHLY_CHALLENGE_STATUS_COMMAND || content === "금딸현황") {
+        await handleMonthlyChallengeStatus(message);
+      } else if (content === MONTHLY_CHALLENGE_COMMAND || content === "금딸챌린지") {
+        await handleMonthlyChallengeJoin(message);
       } else {
         await handlePendingDmReply(message, content);
       }
@@ -1021,6 +1439,13 @@ async function handlePendingDmReply(message, content) {
     return false;
   });
   if (handledByReboot) return;
+
+  // 매달 30일 챌린지(금딸챌린지) 체크인 답장도 다른 파싱보다 먼저 확인합니다.
+  const handledByMonthlyChallenge = await handleMonthlyChallengeCheckinReply(message, content).catch((e) => {
+    console.error("[매달챌린지 답장 처리 오류]", e);
+    return false;
+  });
+  if (handledByMonthlyChallenge) return;
 
   const user = getUser(message.author.id);
   const now = new Date();
