@@ -1864,6 +1864,256 @@ async function handleStreakRequest(message) {
   );
 }
 
+// ── 내 기록 캘린더 이미지 렌더링 (@napi-rs/canvas) ──────────────────
+// 이모지 텍스트 표로는 모바일에서 줄이 깨지기 쉬워서, 카드 형태의 PNG 이미지로
+// 렌더링합니다. 이모지 폰트가 없는 환경 대비로 달/불꽃 아이콘은 직접 벡터로 그립니다.
+function roundRectPath(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.roundRect(x, y, w, h, r);
+}
+
+function drawFlameIcon(ctx, cx, cy, size, color) {
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(size / 24, size / 24);
+  ctx.beginPath();
+  ctx.moveTo(0, 10);
+  ctx.bezierCurveTo(-5, 6, -6, -2, -1, -10);
+  ctx.bezierCurveTo(-1.5, -5, 1, -4, 1.5, -7);
+  ctx.bezierCurveTo(4.5, -3, 6, 3, 3, 8);
+  ctx.bezierCurveTo(4, 5, 3, 2, 1.5, 1);
+  ctx.bezierCurveTo(1.8, 5, -1, 8, 0, 10);
+  ctx.closePath();
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawMoonIcon(ctx, cx, cy, r, color) {
+  ctx.save();
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalCompositeOperation = "destination-out";
+  ctx.beginPath();
+  ctx.arc(cx + r * 0.55, cy - r * 0.25, r * 0.85, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function renderMyRecordCalendarImage({ username, year, month, checkedDays, todayDay, currentStreak, longestStreak }) {
+  const { createCanvas } = require("@napi-rs/canvas");
+  const FONT = EBOOK_WATERMARK_FONT_FAMILY;
+  const scale = 2; // 레티나 화질용 2배 렌더링
+
+  const totalDays = daysInMonth(year, month);
+  const firstWeekday = new Date(Date.UTC(year, month - 1, 1)).getUTCDay(); // 0=일
+  const leadingBlanks = (firstWeekday + 6) % 7; // 월요일 시작 기준으로 보정
+  const rowCount = Math.ceil((leadingBlanks + totalDays) / 7);
+
+  const W = 720;
+  const padX = 44;
+  const topPad = 40;
+  const headerH = 96;
+  const statsH = 76;
+  const weekdayH = 40;
+  const gap = 10;
+  const gridW = W - padX * 2;
+  const cellSize = (gridW - gap * 6) / 7;
+  const gridH = rowCount * cellSize + (rowCount - 1) * gap;
+  const legendH = 46;
+  const bottomPad = 34;
+  const H = topPad + headerH + statsH + weekdayH + gridH + legendH + bottomPad;
+
+  const canvas = createCanvas(Math.round(W * scale), Math.round(H * scale));
+  const ctx = canvas.getContext("2d");
+  ctx.scale(scale, scale);
+
+  const bg1 = "#0d1226";
+  const bg2 = "#171b3a";
+  const surface = "#1b2044";
+  const surfaceBorder = "rgba(255,255,255,0.06)";
+  const textPrimary = "#f3f4fb";
+  const textMuted = "#8d93b8";
+  const textFaint = "rgba(141,147,184,0.35)";
+  const accent = "#43e6a0";
+  const accentDeep = "#1fae76";
+  const amber = "#ffb648";
+  const missedBorder = "rgba(255,255,255,0.14)";
+
+  const bgGrad = ctx.createLinearGradient(0, 0, 0, H);
+  bgGrad.addColorStop(0, bg2);
+  bgGrad.addColorStop(1, bg1);
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, W, H);
+
+  const glow = ctx.createRadialGradient(W - 60, 40, 0, W - 60, 40, 220);
+  glow.addColorStop(0, "rgba(67,230,160,0.14)");
+  glow.addColorStop(1, "rgba(67,230,160,0)");
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, W, H);
+
+  let y = topPad;
+
+  ctx.textBaseline = "alphabetic";
+  ctx.fillStyle = textMuted;
+  ctx.font = `15px ${FONT}`;
+  ctx.textAlign = "left";
+  ctx.fillText(`${username}님의 기록`, padX, y + 20);
+
+  ctx.fillStyle = textPrimary;
+  ctx.font = `bold 34px ${FONT}`;
+  ctx.fillText(`${month}월 기록 캘린더`, padX, y + 62);
+
+  drawMoonIcon(ctx, W - padX - 16, y + 40, 16, "rgba(255,255,255,0.45)");
+
+  y += headerH;
+
+  const checkedCount = checkedDays.size;
+  const stats = [
+    { label: "이번 달 체크인", value: `${checkedCount}/${todayDay}일`, flame: false },
+    { label: "현재 연속", value: `${currentStreak}일`, flame: true },
+    { label: "최고 기록", value: `${longestStreak}일`, flame: false },
+  ];
+  const chipGap = 14;
+  const chipW = (gridW - chipGap * 2) / 3;
+  const chipH = statsH - 20;
+  stats.forEach((s, i) => {
+    const cx = padX + i * (chipW + chipGap);
+    ctx.fillStyle = surface;
+    roundRectPath(ctx, cx, y, chipW, chipH, 16);
+    ctx.fill();
+    ctx.strokeStyle = surfaceBorder;
+    ctx.lineWidth = 1;
+    roundRectPath(ctx, cx + 0.5, y + 0.5, chipW - 1, chipH - 1, 16);
+    ctx.stroke();
+
+    ctx.textAlign = "left";
+    ctx.fillStyle = textMuted;
+    ctx.font = `13px ${FONT}`;
+    ctx.fillText(s.label, cx + 18, y + 27);
+
+    ctx.fillStyle = textPrimary;
+    ctx.font = `bold 20px ${FONT}`;
+    ctx.fillText(s.value, cx + 18, y + 54);
+    if (s.flame) {
+      const w = ctx.measureText(s.value).width;
+      drawFlameIcon(ctx, cx + 18 + w + 16, y + 47, 18, "#ff8a3d");
+    }
+  });
+
+  y += statsH + 18;
+
+  const weekdays = ["월", "화", "수", "목", "금", "토", "일"];
+  ctx.font = `13px ${FONT}`;
+  ctx.textAlign = "center";
+  for (let i = 0; i < 7; i++) {
+    const cx = padX + i * (cellSize + gap) + cellSize / 2;
+    ctx.fillStyle = i === 5 ? "#7fb8ff" : i === 6 ? "#ff8fa3" : textMuted;
+    ctx.fillText(weekdays[i], cx, y + 16);
+  }
+  y += weekdayH;
+
+  const cells = new Array(leadingBlanks).fill(null);
+  for (let d = 1; d <= totalDays; d++) cells.push(d);
+
+  cells.forEach((d, idx) => {
+    if (d === null) return;
+    const col = idx % 7;
+    const row = Math.floor(idx / 7);
+    const cx = padX + col * (cellSize + gap);
+    const cy = y + row * (cellSize + gap);
+    const cxCenter = cx + cellSize / 2;
+    const cyCenter = cy + cellSize / 2;
+
+    const isChecked = checkedDays.has(d);
+    const isToday = d === todayDay;
+    const isFuture = d > todayDay;
+    const isMissed = !isChecked && !isToday && !isFuture;
+
+    if (isChecked) {
+      const g = ctx.createLinearGradient(cx, cy, cx, cy + cellSize);
+      g.addColorStop(0, accent);
+      g.addColorStop(1, accentDeep);
+      ctx.fillStyle = g;
+      roundRectPath(ctx, cx, cy, cellSize, cellSize, 12);
+      ctx.fill();
+
+      ctx.fillStyle = "#06301f";
+      ctx.font = `bold 16px ${FONT}`;
+      ctx.textAlign = "center";
+      ctx.fillText(String(d), cxCenter, cyCenter + 5);
+
+      ctx.strokeStyle = "rgba(6,48,31,0.9)";
+      ctx.lineWidth = 2.2;
+      ctx.beginPath();
+      const chx = cx + cellSize - 15;
+      const chy = cy + 12;
+      ctx.moveTo(chx - 5, chy + 1);
+      ctx.lineTo(chx - 1.5, chy + 4.5);
+      ctx.lineTo(chx + 5, chy - 3);
+      ctx.stroke();
+    } else if (isToday) {
+      ctx.fillStyle = "rgba(255,182,72,0.10)";
+      roundRectPath(ctx, cx, cy, cellSize, cellSize, 12);
+      ctx.fill();
+      ctx.strokeStyle = amber;
+      ctx.lineWidth = 2;
+      roundRectPath(ctx, cx + 1, cy + 1, cellSize - 2, cellSize - 2, 11);
+      ctx.stroke();
+
+      ctx.fillStyle = amber;
+      ctx.font = `bold 16px ${FONT}`;
+      ctx.textAlign = "center";
+      ctx.fillText(String(d), cxCenter, cyCenter + 5);
+    } else if (isMissed) {
+      ctx.strokeStyle = missedBorder;
+      ctx.lineWidth = 1.4;
+      roundRectPath(ctx, cx + 0.7, cy + 0.7, cellSize - 1.4, cellSize - 1.4, 12);
+      ctx.stroke();
+
+      ctx.fillStyle = "rgba(255,255,255,0.32)";
+      ctx.font = `15px ${FONT}`;
+      ctx.textAlign = "center";
+      ctx.fillText(String(d), cxCenter, cyCenter + 5);
+    } else {
+      ctx.strokeStyle = "rgba(255,255,255,0.05)";
+      ctx.lineWidth = 1.4;
+      roundRectPath(ctx, cx + 0.7, cy + 0.7, cellSize - 1.4, cellSize - 1.4, 12);
+      ctx.stroke();
+
+      ctx.fillStyle = textFaint;
+      ctx.font = `15px ${FONT}`;
+      ctx.textAlign = "center";
+      ctx.fillText(String(d), cxCenter, cyCenter + 5);
+    }
+  });
+
+  y += gridH + 20;
+
+  const legend = [
+    { color: accent, label: "체크인" },
+    { color: amber, label: "오늘" },
+    { color: "rgba(255,255,255,0.32)", label: "놓친 날" },
+    { color: "rgba(141,147,184,0.5)", label: "예정" },
+  ];
+  ctx.font = `13px ${FONT}`;
+  let lx = padX;
+  legend.forEach((l) => {
+    ctx.fillStyle = l.color;
+    ctx.beginPath();
+    ctx.arc(lx + 5, y + 11, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = textMuted;
+    ctx.textAlign = "left";
+    ctx.fillText(l.label, lx + 16, y + 15);
+    lx += ctx.measureText(l.label).width + 46;
+  });
+
+  return canvas.toBuffer("image/png");
+}
+
 // ── 내 기록 캘린더 (DM "!내기록") ────────────────────────────
 // 등급 승급 사이 지루한 구간에도 "이만큼 채웠다"는 시각적 성취감을 주기 위한
 // 이번 달 체크인 달력입니다. 월요일을 한 주의 시작으로 맞춰서 보여줍니다.
@@ -1873,39 +2123,53 @@ async function handleMyRecordCalendar(message) {
   const monthKey = today.slice(0, 7);
   const [y, m] = monthKey.split("-").map(Number);
   const checkedDays = new Set((user.checkinDatesByMonth && user.checkinDatesByMonth[monthKey]) || []);
-  const totalDays = daysInMonth(y, m);
   const todayDay = parseInt(today.slice(8, 10), 10);
+  const checkedCount = checkedDays.size;
 
-  // 이번 달 1일의 요일(0=일~6=토)을, 월요일을 0으로 두는 기준으로 바꿔서
-  // 달력 앞쪽에 넣을 빈 칸 수를 계산합니다.
-  const firstWeekday = new Date(`${monthKey}-01T00:00:00+09:00`).getDay();
-  const leadingBlanks = (firstWeekday + 6) % 7;
-
-  const cells = new Array(leadingBlanks).fill(null);
-  for (let d = 1; d <= totalDays; d++) {
-    let mark;
-    if (checkedDays.has(d)) mark = "✅";
-    else if (d === todayDay) mark = "🔵";
-    else if (d < todayDay) mark = "⬜";
-    else mark = "·";
-    cells.push(`${d}${mark}`);
-  }
-
-  const rows = [];
-  for (let i = 0; i < cells.length; i += 7) {
-    rows.push(
-      cells
-        .slice(i, i + 7)
-        .map((c) => (c === null ? "　　" : c))
-        .join("  ")
+  try {
+    const buffer = renderMyRecordCalendarImage({
+      username: message.author.username,
+      year: y,
+      month: m,
+      checkedDays,
+      todayDay,
+      currentStreak: user.currentStreak || 0,
+      longestStreak: user.longestStreak || 0,
+    });
+    const attachment = new AttachmentBuilder(buffer, { name: `기록캘린더-${monthKey}.png` });
+    await message.reply({
+      content: `이번 달 ${checkedCount}/${todayDay}일 체크인했어요. 🔥`,
+      files: [attachment],
+    });
+  } catch (e) {
+    console.error("[내기록 캘린더 이미지 생성 오류]", e);
+    // 이미지 렌더링이 실패해도 명령어 자체는 동작해야 하므로, 텍스트 달력으로 대체합니다.
+    const totalDays = daysInMonth(y, m);
+    const firstWeekday = new Date(`${monthKey}-01T00:00:00+09:00`).getDay();
+    const leadingBlanks = (firstWeekday + 6) % 7;
+    const cells = new Array(leadingBlanks).fill(null);
+    for (let d = 1; d <= totalDays; d++) {
+      let mark;
+      if (checkedDays.has(d)) mark = "✅";
+      else if (d === todayDay) mark = "🔵";
+      else if (d < todayDay) mark = "⬜";
+      else mark = "·";
+      cells.push(`${d}${mark}`);
+    }
+    const rows = [];
+    for (let i = 0; i < cells.length; i += 7) {
+      rows.push(
+        cells
+          .slice(i, i + 7)
+          .map((c) => (c === null ? "　　" : c))
+          .join("  ")
+      );
+    }
+    await message.reply(
+      `🗓️ **${m}월 기록 캘린더**\n\n${rows.join("\n")}\n\n` +
+        `이번 달 ${checkedCount}/${todayDay}일 체크인했어요.\n(✅ 체크인 · ⬜ 놓친 날 · 🔵 오늘 · · 아직 안 옴)`
     );
   }
-
-  const checkedCount = checkedDays.size;
-  await message.reply(
-    `🗓️ **${m}월 기록 캘린더**\n\n${rows.join("\n")}\n\n` +
-      `이번 달 ${checkedCount}/${todayDay}일 체크인했어요.\n(✅ 체크인 · ⬜ 놓친 날 · 🔵 오늘 · · 아직 안 옴)`
-  );
 }
 
 async function handleReflectionHistoryRequest(message) {
