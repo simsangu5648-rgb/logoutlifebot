@@ -142,6 +142,23 @@ const ONCALL_CHANNEL_NAME = process.env.ONCALL_CHANNEL_NAME || "";
 // SOS 직후 "뭐 때문에 그랬는지" DM 질문에 대한 응답을 인정할 시간 (분)
 const TRIGGER_REPLY_WINDOW_MINUTES = parseInt(process.env.TRIGGER_REPLY_WINDOW_MINUTES || "30", 10);
 
+// ── 충동 타이머 (DM "SOS" 시 즉시 카운트다운 + 대체 행동 제안) ────────────
+// #충동-sos 채널은 사람이 반응해줄 때까지 시간이 걸리는데, 정작 제일 위험한 건
+// 그 몇 분이라서, 봇이 즉시(사람 개입 없이) 대체 행동을 던져주는 용도입니다.
+// 기존 "SOS" DM 키워드(Day0 자기 문장 소환, handleRebootSosKeyword)에 이어붙여서
+// 동작하고, 리부트 챌린지 참가 여부와 무관하게 누구에게나 작동합니다.
+const IMPULSE_TIMER_MINUTES = parseInt(process.env.IMPULSE_TIMER_MINUTES || "5", 10);
+const IMPULSE_TIMER_ACTIVITIES = [
+  "팔굽혀펴기 20개 하기",
+  "찬물로 세수하기",
+  "밖에 나가서 5분만 걷기",
+  "물 한 잔 천천히 마시기",
+  "좋아하는 노래 한 곡 듣기",
+  "제자리에서 스트레칭 1분 하기",
+  "친구나 가족에게 아무 말이나 메시지 보내기",
+  "방 안 물건 하나 정리하기",
+];
+
 // ── 경고 누적 시스템 (모욕/욕설/성적 발언 등, AutoMod 키워드 필터로는 못 거르는 것들) ──
 // 운영진(타임아웃/관리자 권한 보유자)이 "!경고 @유저 사유"로 경고를 주면 자동으로 쌓이고,
 // 2회째 자동 타임아웃, 3회째 자동 추방으로 에스컬레이션됩니다.
@@ -155,6 +172,11 @@ const MOD_LOG_CHANNEL_NAME = process.env.MOD_LOG_CHANNEL_NAME || "신고";
 const STREAK_COMMAND = process.env.STREAK_COMMAND || "!기록";
 // 한 달에 이 횟수만큼은, 하루를 걸러도 연속기록(스트릭)이 끊기지 않습니다.
 const STREAK_FREEZE_PER_MONTH = parseInt(process.env.STREAK_FREEZE_PER_MONTH || "1", 10);
+
+// ── 내 기록 캘린더 — 봇 DM에서 "!내기록"으로 조회 ──────────────────────
+// 등급 승급 사이의 지루한 구간에도 "이만큼 채웠다"는 시각적 성취감을 주기 위한
+// 이번 달 체크인 달력입니다. (sim님 요청, 2026-09)
+const MY_RECORD_COMMAND = process.env.MY_RECORD_COMMAND || "!내기록";
 
 // ── 멘토 하이라이트 시스템 ─────────────────────────────────
 const HELPER_THANKS_EMOJI = process.env.HELPER_THANKS_EMOJI || "🙏";
@@ -599,6 +621,11 @@ const MONTHLY_CHALLENGE_CHECKIN_EXAMPLE = "15일차";
 const MONTHLY_CHALLENGE_PARTICIPANT_ROLE_ID = process.env.MONTHLY_CHALLENGE_PARTICIPANT_ROLE_ID || null;
 // "재발"이라고만 짧게 답하면 그날 하루만 카운트에서 빠집니다 (지금까지 쌓은 날짜는 안 깎임).
 const MONTHLY_CHALLENGE_RELAPSE_PHRASES = ["재발", "!재발", "실패", "무너졌어요", "무너졌어"];
+// 재발 보고 직후 "어떤 상황이었는지" 후속 질문에 대한 응답을 인정할 시간 (분)
+const RELAPSE_CONTEXT_REPLY_WINDOW_MINUTES = parseInt(
+  process.env.RELAPSE_CONTEXT_REPLY_WINDOW_MINUTES || "30",
+  10
+);
 // ── 신규 참가자 모집 DM (sim님 요청, 2026-09) ──────────────────────────────
 // 아직 신청 안 한 멤버에게만, 매달 마지막 주(신청 창구가 열리는 시점)에 먼저 DM으로
 // "다음 달 신청하시겠어요?"라고 물어봅니다. 이미 참가 중인 사람은 자동으로 다음
@@ -767,11 +794,20 @@ async function handleMonthlyChallengeStatus(message) {
     return;
   }
 
+  const relapseThisMonth = (mc.relapseLog || []).filter((r) => r.monthKey === mc.monthKey);
+  let relapseText = "";
+  if (relapseThisMonth.length > 0) {
+    const counts = {};
+    for (const r of relapseThisMonth) counts[r.context] = (counts[r.context] || 0) + 1;
+    const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+    relapseText = `\n재발 ${relapseThisMonth.length}회 — ${sorted.map(([k, v]) => `${k} ${v}회`).join(", ")}`;
+  }
+
   await message.reply(
     `📅 이번 달(${mc.monthKey}) 챌린지 현황\n` +
       `성공 일수: ${mc.successDays}/${MONTHLY_CHALLENGE_TARGET_DAYS}일${mc.completedThisMonth ? " ✅ 완주!" : ""}\n` +
       `누적 완주 개월: ${mc.completedMonthsTotal || 0}회\n` +
-      `현재 등급: ${tier ? tier.name : "-"}`
+      `현재 등급: ${tier ? tier.name : "-"}${relapseText}`
   );
 }
 
@@ -798,12 +834,18 @@ async function handleMonthlyChallengeCheckinReply(message, content) {
 
   if (isRelapse) {
     updateUser(discordUserId, {
-      monthlyChallenge: { ...mc, awaitingCheckinReply: false, lastCheckinDate: today },
+      monthlyChallenge: {
+        ...mc,
+        awaitingCheckinReply: false,
+        lastCheckinDate: today,
+        awaitingRelapseContextReply: true,
+        relapseContextPromptSentAt: new Date().toISOString(),
+      },
     });
     await message.reply(
       `오늘 하루만 카운트 안 될 뿐이에요. 지금까지 쌓은 ${mc.successDays}일은 그대로예요. 내일 다시 이어가요.${
         crisisDetected ? CRISIS_HOTLINE_NOTE : ""
-      }`
+      }\n\n혹시 어떤 상황이었는지 한 줄만 남겨주실 수 있어요? (예: "밤", "스트레스", "심심해서" 처럼 편하게 — 완전 선택이에요, 답 안 하셔도 괜찮아요)`
     );
     appendMonthlyChallengeEvent({
       discordUserId,
@@ -856,6 +898,49 @@ async function handleMonthlyChallengeCheckinReply(message, content) {
       console.error("[매달챌린지 완주 처리 오류]", e)
     );
   }
+  return true;
+}
+
+// ── 재발 상황 분류: 자유롭게 적은 한 줄을 "밤/스트레스/심심함/기타" 중 하나로 ──
+// 대략 분류합니다. 엄격한 파싱이 목적이 아니라, 나중에 "!금딸현황"에서
+// "이번 달 재발은 대부분 밤이었어요" 같은 느슨한 패턴 힌트를 주기 위함입니다.
+function classifyRelapseContext(text) {
+  const t = stripSpaces(text);
+  if (/(밤|새벽|자기전|잠들기전|잠자리)/.test(t)) return "밤";
+  if (/(스트레스|힘들|짜증|우울|불안|화나)/.test(t)) return "스트레스";
+  if (/(심심|무료함|지루|할일없)/.test(t)) return "심심함";
+  return "기타";
+}
+
+// ── 재발 상황 후속 답변 처리: "재발" 보고 직후 물어본 "어떤 상황이었나요?"에 ──
+// 대한 답을 relapseLog에 쌓습니다. handlePendingDmReply에서 다른 파싱보다
+// 먼저 확인합니다 (금딸챌린지 재발 흐름의 일부이기 때문).
+async function handleMonthlyChallengeRelapseContextReply(message, content) {
+  const discordUserId = message.author.id;
+  const user = getUser(discordUserId);
+  const mc = user.monthlyChallenge;
+  if (!mc || !mc.awaitingRelapseContextReply || !mc.relapseContextPromptSentAt) return false;
+
+  const now = new Date();
+  if (now - new Date(mc.relapseContextPromptSentAt) > RELAPSE_CONTEXT_REPLY_WINDOW_MINUTES * 60 * 1000) {
+    // 시간 지나서 만료된 질문 - 조용히 대기 상태만 풀어주고, 이 답장은 다른 흐름이 처리하게 넘김
+    updateUser(discordUserId, {
+      monthlyChallenge: { ...mc, awaitingRelapseContextReply: false, relapseContextPromptSentAt: null },
+    });
+    return false;
+  }
+
+  const category = classifyRelapseContext(content);
+  const relapseLog = [
+    ...(mc.relapseLog || []),
+    { date: todayKST(), monthKey: mc.monthKey, context: category, rawText: content.slice(0, 100) },
+  ];
+  updateUser(discordUserId, {
+    monthlyChallenge: { ...mc, relapseLog, awaitingRelapseContextReply: false, relapseContextPromptSentAt: null },
+  });
+  await message.reply(
+    `남겨주셔서 고마워요. "${MONTHLY_CHALLENGE_STATUS_COMMAND}"라고 보내시면 이번 달 재발 패턴을 같이 볼 수 있어요.`
+  );
   return true;
 }
 
@@ -1383,6 +1468,8 @@ client.on(Events.MessageCreate, async (message) => {
         await handleSosPatternHistoryRequest(message);
       } else if (content === "기록" || content === STREAK_COMMAND) {
         await handleStreakRequest(message);
+      } else if (content === "내기록" || content === MY_RECORD_COMMAND) {
+        await handleMyRecordCalendar(message);
       } else if (content === "고해성사" || content === CONFESSION_COMMAND) {
         await handleConfessionStart(message);
       } else if (content === MONTHLY_CHALLENGE_STATUS_COMMAND || content === "금딸현황") {
@@ -1488,12 +1575,18 @@ client.on(Events.MessageCreate, async (message) => {
     const monthlyCounts = { ...(user.monthlyCounts || {}) };
     monthlyCounts[monthKey] = (monthlyCounts[monthKey] || 0) + 1;
 
+    // "!내기록" 캘린더용 — 이번 달 체크인한 일(day-of-month)을 따로 쌓아둡니다.
+    const dayOfMonth = parseInt(today.slice(8, 10), 10);
+    const checkinDatesByMonth = { ...(user.checkinDatesByMonth || {}) };
+    checkinDatesByMonth[monthKey] = [...(checkinDatesByMonth[monthKey] || []), dayOfMonth];
+
     updateUser(message.author.id, {
       cumulativeCount: newCount,
       lastCheckInDate: today,
       currentStreak: newStreak,
       longestStreak: newLongestStreak,
       monthlyCounts,
+      checkinDatesByMonth,
       streakFreezesUsedThisMonth: freezesUsedThisMonth,
       lastStreakFreezeMonth: freezeMonthKey,
     });
@@ -1706,6 +1799,13 @@ async function handlePendingDmReply(message, content) {
   });
   if (handledByMonthlyChallengeRecruit) return;
 
+  // 재발 보고 직후 "어떤 상황이었는지" 후속 질문에 대한 답장도 먼저 확인합니다.
+  const handledByRelapseContext = await handleMonthlyChallengeRelapseContextReply(message, content).catch((e) => {
+    console.error("[재발 상황 기록 처리 오류]", e);
+    return false;
+  });
+  if (handledByRelapseContext) return;
+
   const user = getUser(message.author.id);
   const now = new Date();
 
@@ -1761,6 +1861,50 @@ async function handleStreakRequest(message) {
       `최고 기록: ${user.longestStreak || 0}일\n` +
       `이번 달: ${thisMonthCount}회\n` +
       `🙏 도움 포인트: 이번 주 ${user.weeklyHelperPoints || 0}점 (누적 ${user.totalHelperPoints || 0}점)`
+  );
+}
+
+// ── 내 기록 캘린더 (DM "!내기록") ────────────────────────────
+// 등급 승급 사이 지루한 구간에도 "이만큼 채웠다"는 시각적 성취감을 주기 위한
+// 이번 달 체크인 달력입니다. 월요일을 한 주의 시작으로 맞춰서 보여줍니다.
+async function handleMyRecordCalendar(message) {
+  const user = getUser(message.author.id);
+  const today = todayKST();
+  const monthKey = today.slice(0, 7);
+  const [y, m] = monthKey.split("-").map(Number);
+  const checkedDays = new Set((user.checkinDatesByMonth && user.checkinDatesByMonth[monthKey]) || []);
+  const totalDays = daysInMonth(y, m);
+  const todayDay = parseInt(today.slice(8, 10), 10);
+
+  // 이번 달 1일의 요일(0=일~6=토)을, 월요일을 0으로 두는 기준으로 바꿔서
+  // 달력 앞쪽에 넣을 빈 칸 수를 계산합니다.
+  const firstWeekday = new Date(`${monthKey}-01T00:00:00+09:00`).getDay();
+  const leadingBlanks = (firstWeekday + 6) % 7;
+
+  const cells = new Array(leadingBlanks).fill(null);
+  for (let d = 1; d <= totalDays; d++) {
+    let mark;
+    if (checkedDays.has(d)) mark = "✅";
+    else if (d === todayDay) mark = "🔵";
+    else if (d < todayDay) mark = "⬜";
+    else mark = "·";
+    cells.push(`${d}${mark}`);
+  }
+
+  const rows = [];
+  for (let i = 0; i < cells.length; i += 7) {
+    rows.push(
+      cells
+        .slice(i, i + 7)
+        .map((c) => (c === null ? "　　" : c))
+        .join("  ")
+    );
+  }
+
+  const checkedCount = checkedDays.size;
+  await message.reply(
+    `🗓️ **${m}월 기록 캘린더**\n\n${rows.join("\n")}\n\n` +
+      `이번 달 ${checkedCount}/${todayDay}일 체크인했어요.\n(✅ 체크인 · ⬜ 놓친 날 · 🔵 오늘 · · 아직 안 옴)`
   );
 }
 
@@ -3145,7 +3289,7 @@ async function handleRebootStartCommand(message) {
   await startRebootChallengeDay0(discordUserId, member, (rc.attemptNumber || 0) + 1);
 }
 
-// ── SOS 키워드: Day0 자기 문장 즉시 소환 (사적인 도구, 헬퍼 알림 없음) ──────
+// ── SOS 키워드: Day0 자기 문장 즉시 소환 + 충동 타이머 (사적인 도구, 헬퍼 알림 없음) ──
 async function handleRebootSosKeyword(message) {
   const user = getUser(message.author.id);
   const note = user.rebootChallenge && user.rebootChallenge.selfCompassionNote;
@@ -3156,8 +3300,33 @@ async function handleRebootSosKeyword(message) {
       `아직 적어두신 문장이 없어요. 리부트 챌린지를 시작하면 Day 0에서 그 문장을 적을 수 있어요.\n지금 당장은 — 잠깐 숨 한 번 크게 쉬어보세요. 이 순간은 지나가요.`
     );
   }
-  const sosTriggers = [...(user.sosTriggers || []), { date: todayKST(), note: "(SOS 키워드로 자기 문장 소환)" }];
+  await startImpulseTimer(message);
+  const sosTriggers = [...(user.sosTriggers || []), { date: todayKST(), note: "(SOS 키워드로 충동 타이머 시작)" }];
   updateUser(message.author.id, { sosTriggers });
+}
+
+// ── 충동 타이머: 그 자리에서 바로 대체 행동 하나를 던져주고, 몇 분 뒤에 ──
+// 다시 한번 확인하는 후속 DM을 보냅니다. 리부트 챌린지 참가 여부와 무관하게
+// DM으로 "SOS"라고 보낸 누구에게나 동작합니다.
+// 주의: setTimeout 기반이라 이 시간 안에 봇이 재배포/재시작되면 후속 메시지는
+// 사라집니다 — 몇 분짜리 짧은 창이라 감수하는 트레이드오프입니다.
+async function startImpulseTimer(message) {
+  const activity = IMPULSE_TIMER_ACTIVITIES[Math.floor(Math.random() * IMPULSE_TIMER_ACTIVITIES.length)];
+  await message.reply(
+    `⏱️ 지금부터 ${IMPULSE_TIMER_MINUTES}분만 버텨봐요. 대부분의 충동은 몇 분 안에 잦아들어요.\n\n` +
+      `그 사이에 이거 한번 해볼래요?\n👉 **${activity}**\n\n${IMPULSE_TIMER_MINUTES}분 뒤에 다시 확인하러 올게요.`
+  );
+  const authorId = message.author.id;
+  setTimeout(async () => {
+    try {
+      await message.author.send(
+        `⏱️ ${IMPULSE_TIMER_MINUTES}분 지났어요. 고비 잘 넘기셨나요?\n` +
+          `괜찮아졌으면 다행이고, 아직 힘들면 #${SOS_CHANNEL_NAME}에 남겨주시거나 "고해성사"라고 보내주세요.`
+      );
+    } catch (e) {
+      console.warn(`[충동 타이머 후속 DM 실패] ${authorId} - DM이 막혀있을 수 있어요.`);
+    }
+  }, IMPULSE_TIMER_MINUTES * 60 * 1000);
 }
 
 // ── 완료 처리: 마스터-크루 승급(최초 완주 1회만) + Day31 다이제스트 발송 ────
