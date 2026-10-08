@@ -1090,29 +1090,48 @@ async function finalizeMonthlyChallengeCompletion(discordUserId, member) {
   }
 }
 
-// ── 저녁 9시: 오늘 하루 어땠는지 DM으로 물어봅니다 ────────────────────────
+// ── 저녁 9시: #금딸챌린지-인증 채널에 오늘 날짜 체크인 알림을 한 번 올립니다 ──────
+// (개별 DM 대신 채널 공지 하나로 전환 — sim님 요청, 2026-09. 체크인 방법 자체는
+// 그대로 "n일차" 글이고, 22시30분 개별 리마인더 DM과 "DM 답장으로도 체크인" 기능도
+// 그대로 살아있어서 아래에서 상태만 조용히 세팅해둡니다.)
 async function runMonthlyChallengeEveningJob() {
   const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
   if (!guild) return;
   const members = await guild.members.fetch();
   const monthKey = currentMonthKeyKST();
+  const today = todayKST();
 
+  let activeCount = 0;
   for (const member of members.values()) {
     if (member.user.bot) continue;
     const mc = getUser(member.id).monthlyChallenge;
     if (!mc || !mc.active || mc.monthKey !== monthKey || mc.completedThisMonth) continue;
-    if (mc.awaitingCheckinReply) continue; // 어제 질문에 아직 답 안 함 → 리마인더 잡이 챙김
-    if (mc.lastCheckinDate === todayKST()) continue; // 인증 채널에 먼저 남겨서 오늘자는 이미 체크됨
+    if (mc.lastCheckinDate === today) continue; // 인증 채널에 먼저 남겨서 오늘자는 이미 체크됨
+    activeCount++;
 
-    await safeDM(
-      member,
-      `오늘 하루 어떠셨어요? #${MONTHLY_CHALLENGE_CHECKIN_CHANNEL_NAME}에 "${MONTHLY_CHALLENGE_CHECKIN_EXAMPLE}"처럼 숫자+일차로 남기셔도 되고(뒤에 하고 싶은 말 자유롭게 붙이셔도 돼요), 이 DM에 아무 답장이나 주셔도 성공한 날로 기록돼요. 재발했으면 "재발"이라고 편하게 보내주세요.`
-    );
-    const fresh = getUser(member.id).monthlyChallenge;
     updateUser(member.id, {
-      monthlyChallenge: { ...fresh, awaitingCheckinReply: true, checkinPromptSentAt: new Date().toISOString(), reminderSentToday: false },
+      monthlyChallenge: {
+        ...mc,
+        awaitingCheckinReply: true,
+        checkinPromptSentAt: new Date().toISOString(),
+        reminderSentToday: false,
+      },
     });
   }
+
+  if (activeCount === 0) return; // 오늘 체크인 대상자가 없으면 채널에도 안 올림
+
+  const channel = guild.channels.cache.find(
+    (c) => c.name === MONTHLY_CHALLENGE_CHECKIN_CHANNEL_NAME && typeof c.send === "function"
+  );
+  if (!channel) return;
+
+  const [, mm, dd] = today.split("-");
+  await channel
+    .send(
+      `📅 **${parseInt(mm, 10)}월 ${parseInt(dd, 10)}일**, 오늘 성공하셨나요? "${MONTHLY_CHALLENGE_CHECKIN_EXAMPLE}"처럼 숫자+일차로 남겨주세요! 뒤에 하고 싶은 말 자유롭게 붙이셔도 그대로 인증돼요. (재발했으면 봇 DM으로 "재발"이라고 편하게 보내주세요)`
+    )
+    .catch((e) => console.error("[매달챌린지 채널 알림 실패]", e));
 }
 
 // ── 22시 30분: 오늘 질문에 아직 답 안 한 사람에게 리마인더 1회 ─────────────
@@ -3967,6 +3986,15 @@ async function runRebootEveningJob() {
         await safeDM(member, `(다시 안내드려요)\n\n${text}`);
         const fresh = getUser(member.id).rebootChallenge;
         updateUser(member.id, { rebootChallenge: { ...fresh, checkinPromptSentAt: new Date().toISOString(), reminderSentToday: false } });
+      } else if (rc.currentDay === 8) {
+        // Day7 답장을 받으면 currentDay=8, awaitingCheckinReply=false 상태로 넘어오는데, 예전엔
+        // 이 경우 Day8 메시지를 "처음" 보내는 코드가 없어서 8일차에서 영원히 멈췄습니다.
+        // (Day8 메시지는 결번 처리 경로로 넘어온 사람만 받았어요.) 여기서 처음 발송합니다.
+        await safeDM(member, rebootDay8Message());
+        const fresh = getUser(member.id).rebootChallenge;
+        updateUser(member.id, {
+          rebootChallenge: { ...fresh, awaitingCheckinReply: true, checkinPromptSentAt: new Date().toISOString(), reminderSentToday: false },
+        });
       }
       continue;
     }
