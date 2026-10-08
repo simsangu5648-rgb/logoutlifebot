@@ -430,7 +430,7 @@ const REBOOT_SHEET_BACKFILL_COMMAND = "!챌린지시트백필";
 const REBOOT_STATS_COMMAND = "!챌린지통계";
 const REBOOT_PROMPT_CRON = process.env.REBOOT_PROMPT_CRON || "0 20 * * *"; // 매일 20시 발송
 const REBOOT_REMINDER_CRON = process.env.REBOOT_REMINDER_CRON || "0 22 * * *"; // 매일 22시 리마인더
-const REBOOT_MORNING_CRON = process.env.REBOOT_MORNING_CRON || "0 9 * * *"; // D+1 자동시작 + Day7 다이제스트
+const REBOOT_MORNING_CRON = process.env.REBOOT_MORNING_CRON || "0 9 * * *"; // 시작 초대 DM(1회) + Day7 다이제스트 안전망
 const REBOOT_COOLDOWN_DAYS = 3;
 
 // SOS 키워드: Day 0에 적어둔 selfCompassionNote를 즉시 다시 보여주는 사적인 자기 진정 도구.
@@ -766,7 +766,7 @@ async function handleMonthlyChallengeJoin(message) {
   );
 
   await message.reply(
-    `🔥 ${targetMonthKey} 챌린지 신청 완료! ${targetMonthKey} 1일부터 자동으로 시작돼서, 매일 저녁 9시쯤 "오늘 하루 어떠셨어요?"라고 물어볼게요.\n` +
+    `🔥 ${targetMonthKey} 챌린지 신청 완료! ${targetMonthKey} 1일부터 자동으로 시작돼요. 따로 매일 물어보지는 않고, 직접 인증을 남기시면 돼요 (저녁 10시 30분까지 안 남기셨으면 한 번만 가볍게 알려드려요).\n` +
       `#${MONTHLY_CHALLENGE_CHECKIN_CHANNEL_NAME} 채널에 "${MONTHLY_CHALLENGE_CHECKIN_EXAMPLE}"처럼 숫자+일차로 시작하는 글을 남기셔도 되고(뒤에 하고 싶은 말 자유롭게 붙이셔도 돼요), 이 DM에 아무 답장이나 주셔도 성공한 날로 기록돼요. 재발했으면 그냥 "재발"이라고 편하게 보내주세요 — 그래도 지금까지 쌓은 날짜는 절대 안 사라져요.\n` +
       `"${MONTHLY_CHALLENGE_STATUS_COMMAND}"라고 보내시면 언제든 진행 상황을 볼 수 있어요.`
   );
@@ -1059,9 +1059,7 @@ async function applyRankRole(member, oldTierIndex, newTierIndex) {
   if (newRoleId) {
     await member.roles.add(newRoleId).catch((e) => console.error("[등급 역할 부여 실패]", e));
   }
-  if (MONTHLY_CHALLENGE_NICKNAME_TAG_ENABLED) {
-    await applyRankNicknameTag(member, newTierIndex);
-  }
+  // (닉네임 [직급] 태그 자동 변경은 사용자 닉네임을 봇이 마음대로 바꾸는 게 부담이라 제거했습니다.)
 }
 
 // ── 완료 처리: 누적 완주 개월 +1, 등급 재계산, 승급 시에만 역할/공지 ─────────
@@ -1090,26 +1088,24 @@ async function finalizeMonthlyChallengeCompletion(discordUserId, member) {
   }
 }
 
-// ── 저녁 9시: #금딸챌린지-인증 채널에 오늘 날짜 체크인 알림을 한 번 올립니다 ──────
-// (개별 DM 대신 채널 공지 하나로 전환 — sim님 요청, 2026-09. 체크인 방법 자체는
-// 그대로 "n일차" 글이고, 22시30분 개별 리마인더 DM과 "DM 답장으로도 체크인" 기능도
-// 그대로 살아있어서 아래에서 상태만 조용히 세팅해둡니다.)
+// ── 저녁 9시: 메시지는 보내지 않고, 오늘 체크인 대기 상태만 조용히 세팅합니다 ──────
+// (스팸 느낌을 줄이려고 9시 채널 공지/개별 DM은 제거했습니다. 체크인 방법은 그대로
+// "n일차" 글이고, 22시30분 개별 리마인더 DM과 "DM 답장으로도 체크인" 기능이 이 상태에 의존해요.)
 async function runMonthlyChallengeEveningJob() {
   const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
   if (!guild) return;
-  const members = await guild.members.fetch();
+  // 주의: 여기서 guild.members.fetch()를 부르면 안 됩니다. 같은 21:00에 스트릭 리마인더 잡도
+  // 멤버 전체를 불러오는데, 디스코드가 이 요청(opcode 8)을 짧은 간격으로 두 번 못 받게 막아서
+  // (GatewayRateLimitError) 이 잡이 매일 밤 실패했습니다. 저장소의 참가자 ID만으로 충분해요.
   const monthKey = currentMonthKeyKST();
   const today = todayKST();
 
-  let activeCount = 0;
-  for (const member of members.values()) {
-    if (member.user.bot) continue;
-    const mc = getUser(member.id).monthlyChallenge;
+  for (const userId of allUserIds()) {
+    const mc = getUser(userId).monthlyChallenge;
     if (!mc || !mc.active || mc.monthKey !== monthKey || mc.completedThisMonth) continue;
     if (mc.lastCheckinDate === today) continue; // 인증 채널에 먼저 남겨서 오늘자는 이미 체크됨
-    activeCount++;
 
-    updateUser(member.id, {
+    updateUser(userId, {
       monthlyChallenge: {
         ...mc,
         awaitingCheckinReply: true,
@@ -1118,35 +1114,21 @@ async function runMonthlyChallengeEveningJob() {
       },
     });
   }
-
-  if (activeCount === 0) return; // 오늘 체크인 대상자가 없으면 채널에도 안 올림
-
-  const channel = guild.channels.cache.find(
-    (c) => c.name === MONTHLY_CHALLENGE_CHECKIN_CHANNEL_NAME && typeof c.send === "function"
-  );
-  if (!channel) return;
-
-  const [, mm, dd] = today.split("-");
-  await channel
-    .send(
-      `📅 **${parseInt(mm, 10)}월 ${parseInt(dd, 10)}일**, 오늘 성공하셨나요? "${MONTHLY_CHALLENGE_CHECKIN_EXAMPLE}"처럼 숫자+일차로 남겨주세요! 뒤에 하고 싶은 말 자유롭게 붙이셔도 그대로 인증돼요. (재발했으면 봇 DM으로 "재발"이라고 편하게 보내주세요)`
-    )
-    .catch((e) => console.error("[매달챌린지 채널 알림 실패]", e));
 }
 
 // ── 22시 30분: 오늘 질문에 아직 답 안 한 사람에게 리마인더 1회 ─────────────
 async function runMonthlyChallengeReminderJob() {
   const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
   if (!guild) return;
-  const members = await guild.members.fetch();
   const today = todayKST();
 
-  for (const member of members.values()) {
-    if (member.user.bot) continue;
-    const mc = getUser(member.id).monthlyChallenge;
+  for (const userId of allUserIds()) {
+    const mc = getUser(userId).monthlyChallenge;
     if (!mc || !mc.active || !mc.awaitingCheckinReply || mc.reminderSentToday || !mc.checkinPromptSentAt) continue;
     const sentDate = new Intl.DateTimeFormat("en-CA", { timeZone: TZ }).format(new Date(mc.checkinPromptSentAt));
     if (sentDate !== today) continue;
+    const member = await guild.members.fetch(userId).catch(() => null);
+    if (!member || member.user.bot) continue;
     await safeDM(member, "⏰ 오늘 이번 달 챌린지 체크인 아직 안 하셨어요. 짧게 아무 말이나 답장 주세요 🙂");
     const fresh = getUser(member.id).monthlyChallenge;
     updateUser(member.id, { monthlyChallenge: { ...fresh, reminderSentToday: true } });
@@ -1192,30 +1174,18 @@ async function runMonthlyChallengeRolloverJob() {
   }
 }
 
-// ── 신규 참가자 모집 DM 발송: 매달 마지막 주 초입(기본 25일 저녁)에, 아직 신청
-// 안 한 멤버에게만 "다음 달 신청하시겠어요?"라고 먼저 물어봅니다. 이미 참가
-// 중인 사람은 자동으로 다음 달도 이어지므로 제외합니다(sim님 요청, 2026-09).
+// ── 신규 참가자 모집 안내: 매달 마지막 주 초입(기본 25일 저녁)에 공개 채널에 딱 한 번만 알립니다.
+// (예전엔 참가 안 한 모든 멤버에게 개별 DM을 보냈는데 스팸처럼 느껴질 수 있어서 제거했어요.
+// 원하는 사람이 알아서 "!금딸챌린지"를 보내 신청하는 방식입니다.)
 async function runMonthlyChallengeRecruitJob() {
   const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
   if (!guild) return;
-  const members = await guild.members.fetch().catch(() => null);
-  if (!members) return;
-
+  const channel = findAnnounceChannel(guild);
+  if (!channel) return;
   const targetMonthKey = nextMonthKey(currentMonthKeyKST());
-
-  for (const member of members.values()) {
-    if (member.user.bot) continue;
-    const user = getUser(member.id);
-    if (user.monthlyChallenge && user.monthlyChallenge.active) continue; // 이미 참가 중 - 자동으로 이어짐
-
-    updateUser(member.id, {
-      monthlyChallengeRecruit: { promptSentAt: new Date().toISOString(), stage: "asked" },
-    });
-    await safeDM(
-      member,
-      `다음 달(${targetMonthKey}) 금딸챌린지 신청하시겠어요? 신청하고 싶으시면 편하게 답장 주세요 🙂`
-    ).catch((e) => console.error("[매달챌린지 모집 DM 실패]", e));
-  }
+  await channel
+    .send(`📢 ${targetMonthKey} 금딸챌린지 신청이 열려 있어요. 함께하고 싶다면 봇 DM에 "${MONTHLY_CHALLENGE_COMMAND}"라고 보내주세요. (이번 달 말일까지)`)
+    .catch((e) => console.error("[매달챌린지 모집 공지 실패]", e));
 }
 
 function scheduleMonthlyChallengeJobs() {
@@ -1411,7 +1381,7 @@ client.once(Events.ClientReady, (c) => {
   scheduleDailyJob();
   scheduleStreakReminderJob();
   scheduleWeeklyHighlightJob();
-  scheduleWeeklyTipJob();
+  // scheduleWeeklyTipJob(); // 주간 팁/회고 DM은 스팸처럼 느껴질 수 있어 비활성화했습니다 (2026-10)
   scheduleInsightReminderJob();
   scheduleRebootChallengeJobs();
   scheduleMonthlyChallengeJobs();
@@ -1441,14 +1411,9 @@ client.on(Events.MessageCreate, async (message) => {
       });
       if (relayed) return;
 
-      if (content === "알림끄기" || content === "!알림끄기") {
-        updateUser(message.author.id, { publicAnnounceOptOut: true });
-        await message.reply(
-          "앞으로 승급하셔도 공개 채널에는 알리지 않을게요. 다시 켜고 싶으면 \"알림켜기\"라고 보내주세요."
-        );
-      } else if (content === "알림켜기" || content === "!알림켜기") {
-        updateUser(message.author.id, { publicAnnounceOptOut: false });
-        await message.reply("좋아요! 승급하시면 다시 공개 채널에서 축하 메시지를 남길게요 🎉");
+      const notifyCmd = parseNotifySettingCommand(content);
+      if (notifyCmd) {
+        await handleNotifySettingCommand(message, notifyCmd);
       } else if (isRebootSosKeyword(content)) {
         await handleRebootSosKeyword(message);
       } else if (EBOOK_PURCHASE_COMMANDS.includes(content)) {
@@ -1560,8 +1525,7 @@ client.on(Events.MessageCreate, async (message) => {
     const today = todayKST();
 
     if (user.lastCheckInDate === today) {
-      // 하루 중복 방지 - 카운트는 안 올리고 리액션만
-      await safeReact(message, "⏳");
+      // 하루 중복 방지 - 카운트는 안 올리고 조용히 넘어갑니다(리액션도 남기지 않음)
       return;
     }
 
@@ -1772,7 +1736,7 @@ function describeNextLevelProgress(member, user) {
   if (member.roles.cache.has(ROLE_ID_GROW)) {
     const rc = user.rebootChallenge;
     if (!rc || !rc.status) {
-      return `전자책 구매 다음 날부터 "30일 리부트 챌린지" DM이 자동으로 시작돼요. 이 챌린지를 완주하면 마스터-크루로 승급해요.`;
+      return `봇 DM에 "${REBOOT_START_COMMAND}"라고 보내면 "30일 리부트 챌린지"를 시작할 수 있어요. 이 챌린지를 완주하면 마스터-크루로 승급해요.`;
     }
     if (rc.status === "in_progress" || rc.status === "pending_day0") {
       return `지금 30일 리부트 챌린지 진행 중이에요 (Day ${rc.currentDay}/31). 완주하면 마스터-크루로 승급해요!`;
@@ -2518,9 +2482,9 @@ async function handlePromotionAnnounce(message, content) {
       return;
     }
 
-    if (u.publicAnnounceOptOut) {
+    if (!u.publicAnnounceOptIn) {
       await message.reply(
-        `${targetUser.tag || targetUser.username}님은 "알림끄기" 상태라 공개 축하 메시지를 올리지 않았어요. 그래도 올리고 싶으면 먼저 본인에게 알림을 다시 켜달라고 요청해주세요.`
+        `${targetUser.tag || targetUser.username}님은 "공개축하켜기"를 하지 않아서 공개 축하 메시지를 올리지 않았어요. 올리려면 본인이 봇 DM에 "공개축하켜기"를 보내야 해요.`
       );
       return;
     }
@@ -2746,7 +2710,7 @@ async function promoteToGrowCrewByEbook(discordUserId) {
 
     // (예전엔 여기서 "구매 이전 누적 인증이 T_MASTER회를 넘으면 즉시 마스터-크루 승급"을
     // 처리했지만, 마스터-크루 승급 기준이 "30일 리부트 챌린지 최초 완주"로 바뀌면서 삭제했습니다.
-    // 30일 리부트 챌린지는 이 함수가 끝난 뒤 별도로(D+1 자동 시작 스캔) 시작됩니다.)
+    // 30일 리부트 챌린지는 이 함수가 끝난 뒤 별도로(본인이 !챌린지시작을 보내면) 시작됩니다.)
   } catch (e) {
     console.error("[전자책 승급 처리 오류]", e);
   }
@@ -2952,6 +2916,7 @@ async function notifyHelpers(message, text) {
     if (!roleIds.some((rid) => m.roles.cache.has(rid))) return false;
 
     const u = getUser(m.id);
+    if (u.helperNotifyOptOut) return false; // "도움알림끄기"를 보낸 크루는 제외
     if (!u.lastCheckInDate) return false;
     const last = new Date(u.lastCheckInDate + "T00:00:00+09:00");
     if (daysBetween(last, now) > HELPER_ACTIVE_WITHIN_DAYS) return false;
@@ -2983,7 +2948,7 @@ async function notifyHelpers(message, text) {
 async function announcePromotion(guild, member, roleLabel) {
   try {
     const u = getUser(member.id);
-    if (u.publicAnnounceOptOut) return false;
+    if (!u.publicAnnounceOptIn) return false; // 공개 축하는 본인이 "공개축하켜기"를 보낸 경우에만
     const channel = findAnnounceChannel(guild);
     if (!channel) return false;
     await channel.send(`🎉 **${member.displayName}**님이 ${roleLabel}로 승급했어요! 축하해주세요 👏`);
@@ -3061,8 +3026,9 @@ client.on(Events.MessageReactionRemove, async (reaction, reactUser) => {
   }
 });
 
-// ── 매일 정기 점검: 온보딩 미션 + 미기록 독려 + 월간 리포트 ──
-// (결제전환 DM(D+25/32/40) 시퀀스는 sim님 요청으로 삭제했습니다, 2026-09)
+// ── 매일 정기 점검: 월간 리포트(선택형) ──
+// (미기록 독려 DM, 가입 D+1/D+3 온보딩 DM은 스팸처럼 느껴질 수 있어 제거했습니다, 2026-10.
+//  결제전환 DM 시퀀스도 앞서 삭제됨. 월간 리포트는 "리포트켜기"를 보낸 사람에게만 갑니다.)
 function scheduleDailyJob() {
   const expr = DAILY_CRON || "0 9 * * *";
   cron.schedule(expr, () => runDailyJob().catch((e) => console.error("[dailyJob 오류]", e)), { timezone: TZ });
@@ -3070,64 +3036,31 @@ function scheduleDailyJob() {
 }
 
 async function runDailyJob() {
-  const guild = await client.guilds.fetch(GUILD_ID);
-  const members = await guild.members.fetch();
-  const now = new Date();
   const today = todayKST();
-  const lastDay = isLastDayOfMonthKST(today);
+  if (!isLastDayOfMonthKST(today)) return;
+  const guild = await client.guilds.fetch(GUILD_ID);
+  const monthKey = today.slice(0, 7);
 
-  for (const member of members.values()) {
-    if (member.user.bot) continue;
-    const user = getUser(member.id);
-
-    // 1) 미기록 독려 DM (3일 이상 기록 없을 때, 같은 날 중복 발송 방지)
-    if (user.lastCheckInDate) {
-      const last = new Date(user.lastCheckInDate + "T00:00:00+09:00");
-      const gap = daysBetween(last, now);
-      if (gap >= 3 && user.lastInactivityNudgeDate !== today) {
-        await safeDM(member, "요즘 기록이 뜸하네요. 괜찮아요, 아무때나 다시 시작하면 됩니다 🙂");
-        updateUser(member.id, { lastInactivityNudgeDate: today });
-      }
+  for (const userId of allUserIds()) {
+    const user = getUser(userId);
+    if (!user.monthlyReportOptIn) continue;
+    if (user.lastMonthlyReportMonth === monthKey) continue;
+    const monthCount = (user.monthlyCounts && user.monthlyCounts[monthKey]) || 0;
+    if (monthCount > 0) {
+      const member = await guild.members.fetch(userId).catch(() => null);
+      if (!member || member.user.bot) continue;
+      const prevKey = prevMonthKey(monthKey);
+      const prevCount = (user.monthlyCounts && user.monthlyCounts[prevKey]) || 0;
+      const diff = monthCount - prevCount;
+      const diffStr = diff > 0 ? `+${diff}` : `${diff}`;
+      await safeDM(
+        member,
+        `📊 이번 달 기록을 정리해봤어요.\n` +
+          `이번 달 인증 ${monthCount}회, 최장 연속 ${user.longestStreak || 0}일, 지난달 대비 ${diffStr}회.\n` +
+          `꾸준히 잘 해오고 계세요! (끄려면 "리포트끄기")`
+      );
     }
-
-    // 2) 온보딩 웰컴 DM (가입 D+1/3) - 가벼운 안내만, 결제 여부와 무관하게 모두 대상
-    if (member.joinedAt) {
-      const daysSinceJoin = daysBetween(member.joinedAt, now);
-      if (daysSinceJoin === 1 && !user.dmFlags.o1) {
-        await safeDM(
-          member,
-          `가입한 지 하루 됐어요! 아직이라면 #자기소개에 편하게 인사 한마디 남겨보세요.`
-        );
-        markDmSent(member.id, "o1");
-      } else if (daysSinceJoin === 3 && !user.dmFlags.o3) {
-        await safeDM(
-          member,
-          `벌써 3일째예요! 오늘은 #자유수다에 아무 얘기나 편하게 남겨보는 거 어때요? 혼자보다 같이가 훨씬 오래 갑니다.`
-        );
-        markDmSent(member.id, "o3");
-      }
-    }
-
-    // 3) 월간 리포트 카드 (매월 마지막 날, 유저당 최초 1회)
-    if (lastDay) {
-      const monthKey = today.slice(0, 7);
-      if (user.lastMonthlyReportMonth !== monthKey) {
-        const monthCount = (user.monthlyCounts && user.monthlyCounts[monthKey]) || 0;
-        if (monthCount > 0) {
-          const prevKey = prevMonthKey(monthKey);
-          const prevCount = (user.monthlyCounts && user.monthlyCounts[prevKey]) || 0;
-          const diff = monthCount - prevCount;
-          const diffStr = diff > 0 ? `+${diff}` : `${diff}`;
-          await safeDM(
-            member,
-            `📊 이번 달 기록을 정리해봤어요.\n` +
-              `이번 달 인증 ${monthCount}회, 최장 연속 ${user.longestStreak || 0}일, 지난달 대비 ${diffStr}회.\n` +
-              `꾸준히 잘 해오고 계세요!`
-          );
-        }
-        updateUser(member.id, { lastMonthlyReportMonth: monthKey });
-      }
-    }
+    updateUser(userId, { lastMonthlyReportMonth: monthKey });
   }
 }
 
@@ -3144,13 +3077,12 @@ function scheduleStreakReminderJob() {
 
 async function runStreakReminderJob() {
   const guild = await client.guilds.fetch(GUILD_ID);
-  const members = await guild.members.fetch();
   const now = new Date();
   const today = todayKST();
 
-  for (const member of members.values()) {
-    if (member.user.bot) continue;
-    const user = getUser(member.id);
+  for (const userId of allUserIds()) {
+    const user = getUser(userId);
+    if (!user.streakReminderOptIn) continue; // "리마인더켜기"를 보낸 사람에게만
     if (!user.lastCheckInDate || !user.currentStreak) continue;
     if (user.lastCheckInDate === today) continue; // 오늘 이미 체크인함 - 리마인더 불필요
     if (user.lastStreakReminderDate === today) continue; // 오늘 이미 보냄
@@ -3159,11 +3091,13 @@ async function runStreakReminderJob() {
     const gap = daysBetween(last, now);
     if (gap === 1) {
       // 마지막 체크인이 어제라 아직 스트릭을 이어갈 기회가 있는 상태
+      const member = await guild.members.fetch(userId).catch(() => null);
+      if (!member || member.user.bot) continue;
       await safeDM(
         member,
-        `지금 ${user.currentStreak}일째 이어오고 계세요 🔥 오늘 하루도 잊지 않으셨다면 인증 한 번 남겨서 기록을 이어가보세요.`
+        `지금 ${user.currentStreak}일째 이어오고 계세요 🔥 오늘 하루도 잊지 않으셨다면 인증 한 번 남겨서 기록을 이어가보세요. (끄려면 "리마인더끄기")`
       );
-      updateUser(member.id, { lastStreakReminderDate: today });
+      updateUser(userId, { lastStreakReminderDate: today });
     }
   }
 }
@@ -3187,6 +3121,7 @@ async function runWeeklyHighlightJob() {
   for (const id of ids) {
     const u = getUser(id);
     if (!u.weeklyHelperPoints) continue;
+    if (!u.publicAnnounceOptIn) continue; // 공개 발표는 "공개축하켜기"를 보낸 사람만 대상
     if (!top || u.weeklyHelperPoints > top.points) {
       top = { id, points: u.weeklyHelperPoints };
     }
@@ -3492,7 +3427,7 @@ ${execLines.join("\n") || "(아직 없음)"}`;
   return `📥 리부트 챌린지 현황 조회 — ${label} (ID: ${discordUserId})\n(아래 메시지를 통째로 복사해서 Claude에 붙여넣으세요)\n──────────────────────────\n${instruction}`;
 }
 
-// ── Day 0 시작 (D+1 자동 발송 또는 !챌린지시작 재도전) ─────────────────────
+// ── Day 0 시작 (!챌린지시작 명령어로만 시작) ─────────────────────
 async function startRebootChallengeDay0(discordUserId, member, attemptNumber) {
   const prev = getUser(discordUserId).rebootChallenge;
   const today = todayKST();
@@ -3545,7 +3480,7 @@ async function startRebootChallengeDay0(discordUserId, member, attemptNumber) {
   await safeDM(member, rebootDay0Message());
 }
 
-// ── 참가자 명령어: !챌린지시작 (재도전 / 옵트아웃 후 재개용. 최초 시작은 D+1 자동) ──
+// ── 참가자 명령어: !챌린지시작 (최초 시작 / 재도전 / 옵트아웃 후 재개) ──
 async function handleRebootStartCommand(message) {
   const discordUserId = message.author.id;
   const user = getUser(discordUserId);
@@ -3933,25 +3868,30 @@ async function handleRebootMissedAndAdvance(discordUserId, member) {
   });
 }
 
-// ── 09시: D+1 자동 시작 스캔 + Day7→8 분석 다이제스트 발송 ─────────────────
+// ── 09시: 시작 초대 DM(1회) + Day7→8 분석 다이제스트 안전망 ─────────────────
+// 챌린지는 자동으로 시작하지 않습니다. 구매 다음 날 "시작하고 싶으면 !챌린지시작" 안내를
+// 딱 한 번만 보내고, 실제 시작은 본인이 명령어를 보냈을 때만 합니다.
 async function runRebootMorningJob() {
   const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
   if (!guild) return;
-  const members = await guild.members.fetch();
   const now = new Date();
 
-  for (const member of members.values()) {
-    if (member.user.bot) continue;
-    const user = getUser(member.id);
+  for (const userId of allUserIds()) {
+    const user = getUser(userId);
     if (!user.ebookPurchased || !user.ebookPurchasedAt) continue;
     const rc = user.rebootChallenge;
 
     if (!rc.status) {
+      if (user.rebootInviteSentAt) continue; // 초대는 평생 1회
       const daysSincePurchase = daysBetween(new Date(user.ebookPurchasedAt), now);
       if (daysSincePurchase >= 1) {
-        await startRebootChallengeDay0(member.id, member, (rc.attemptNumber || 0) + 1).catch((e) =>
-          console.error("[챌린지 자동시작 오류]", e)
+        const member = await guild.members.fetch(userId).catch(() => null);
+        if (!member || member.user.bot) continue;
+        await safeDM(
+          member,
+          `📘 전자책 읽어주셔서 고마워요. 준비되셨다면 30일 리부트 챌린지를 시작해볼 수 있어요. 시작하려면 이 DM에 "${REBOOT_START_COMMAND}"라고 보내주세요. 매일 저녁 8시에 질문이 하나씩 와요. 지금 하고 싶지 않으면 그냥 두셔도 괜찮고, 이 안내는 다시 보내지 않을게요.`
         );
+        updateUser(userId, { rebootInviteSentAt: new Date().toISOString() });
       }
       continue;
     }
@@ -3960,6 +3900,8 @@ async function runRebootMorningJob() {
     // Day7 답장이 오는 즉시 실시간으로 보냅니다. 이 블록은 그 실시간 발송이 어떤 이유로든
     // 실패했을 때(예: 그 순간 DM 전송 오류) 다음날 아침에 놓치지 않고 다시 시도하는 안전망입니다.
     if (rc.status === "in_progress" && rc.currentDay === 8 && !rc.day7DigestSentAt) {
+      const member = await guild.members.fetch(userId).catch(() => null);
+      if (!member || member.user.bot) continue;
       const prompt = buildDay7Prompt(member.id, member.displayName);
       await notifyOwnerText(prompt);
       const fresh = getUser(member.id).rebootChallenge;
@@ -4328,6 +4270,64 @@ async function safeReact(message, emoji) {
   } catch (e) {
     // 리액션 권한 없거나 메시지 삭제된 경우 등 - 무시
   }
+}
+
+// ── 알림 설정(전부 선택형): 기본값은 모두 "꺼짐"(헬퍼 호출만 예외로 켜짐) ───────────
+// 사용자가 DM으로 직접 켜야만 오는 알림들입니다.
+const NOTIFY_SETTINGS = {
+  공개축하: { field: "publicAnnounceOptIn", defaultOn: false, label: "공개 축하/이주의 도움왕에 내 이름 올리기", extra: "승급·도움왕을 공개 채널에서 축하해드려요" },
+  리마인더: { field: "streakReminderOptIn", defaultOn: false, label: "스트릭 리마인더 DM", extra: "연속 기록이 끊기기 전 저녁에 한 번 알려드려요" },
+  리포트: { field: "monthlyReportOptIn", defaultOn: false, label: "월간 리포트 DM", extra: "매월 마지막 날 한 달 기록을 정리해드려요" },
+  도움알림: { field: "helperNotifyOptOut", defaultOn: true, inverted: true, label: "도움 요청 알림 DM (크루 전용)", extra: "SOS·신규 멤버 첫 글이 올라오면 가끔 알려드려요" },
+};
+
+function isNotifyOn(user, key) {
+  const def = NOTIFY_SETTINGS[key];
+  const raw = user[def.field];
+  if (def.inverted) return !raw; // helperNotifyOptOut: true면 꺼짐
+  return raw === true;
+}
+
+function parseNotifySettingCommand(content) {
+  const c = content.replace(/^!/, "").trim();
+  if (c === "알림설정") return { type: "status" };
+  if (c === "알림켜기") return { type: "status" }; // 예전 명령어: 이제는 설정 화면을 보여줍니다
+  if (c === "알림끄기") return { type: "allOff" };
+  for (const key of Object.keys(NOTIFY_SETTINGS)) {
+    if (c === `${key}켜기`) return { type: "on", key };
+    if (c === `${key}끄기`) return { type: "off", key };
+  }
+  return null;
+}
+
+function buildNotifyStatusText(user) {
+  const lines = Object.keys(NOTIFY_SETTINGS).map((key) => {
+    const def = NOTIFY_SETTINGS[key];
+    return `${isNotifyOn(user, key) ? "🟢" : "⚪"} ${def.label}\n   → "${key}켜기" / "${key}끄기"  (${def.extra})`;
+  });
+  return `🔔 알림 설정 (원하는 것만 켜세요)\n\n${lines.join("\n")}\n\n전부 끄려면 "알림끄기"라고 보내주세요.`;
+}
+
+async function handleNotifySettingCommand(message, cmd) {
+  const uid = message.author.id;
+  if (cmd.type === "status") {
+    await message.reply(buildNotifyStatusText(getUser(uid)));
+    return;
+  }
+  if (cmd.type === "allOff") {
+    const patch = {};
+    for (const key of Object.keys(NOTIFY_SETTINGS)) {
+      const def = NOTIFY_SETTINGS[key];
+      patch[def.field] = def.inverted ? true : false;
+    }
+    updateUser(uid, patch);
+    await message.reply("선택 알림을 전부 껐어요. 필요하면 \"알림설정\"이라고 보내서 다시 고르실 수 있어요.");
+    return;
+  }
+  const def = NOTIFY_SETTINGS[cmd.key];
+  const turnOn = cmd.type === "on";
+  updateUser(uid, { [def.field]: def.inverted ? !turnOn : turnOn });
+  await message.reply(turnOn ? `🟢 "${def.label}" 켰어요. (${def.extra})` : `⚪ "${def.label}" 껐어요.`);
 }
 
 async function safeDM(member, text) {
