@@ -1385,7 +1385,7 @@ client.once(Events.ClientReady, (c) => {
   scheduleInsightReminderJob();
   scheduleRebootChallengeJobs();
   scheduleMonthlyChallengeJobs();
-  scheduleConvoStarterJob();
+  // scheduleConvoStarterJob(); // 월·수·금 #자유수다 대화거리 질문은 비활성화했습니다 (2026-10)
 });
 
 // (무료멤버 자동 역할 부여는 커뮤니티 초간소화 개편으로 무료 등급 자체가
