@@ -16,8 +16,6 @@ const {
   getUser,
   updateUser,
   allUserIds,
-  isPaymentProcessed,
-  markPaymentProcessed,
   nextConvoStarterIndex,
   nextConfessionResponseIndex,
   recordConfessionRelay,
@@ -25,7 +23,6 @@ const {
 } = require("./lib/store");
 const {
   appendRebootEvent,
-  appendSalesEvent,
   appendConfessionEvent,
   appendMonthlyChallengeEvent,
   isConfigured: isSheetsConfigured,
@@ -53,8 +50,8 @@ for (const [k, v] of Object.entries(REQUIRED)) {
 // (하루 1회만 카운트) 누적 인증으로 인정합니다. 최소한의 스팸 방지로 "의미 있는
 // 텍스트(2자 이상)"나 "첨부파일" 둘 중 하나는 있어야 합니다.
 
-// 마스터-크루는 "이미 리부트-크루(전자책 구매 완료)인 사람"이 누적 인증을 더 쌓았을 때 도달하는
-// 최종 등급입니다. (리부트-크루 자체는 더 이상 누적 횟수가 아니라 전자책 구매로만 승급합니다 - 아래 참고)
+// 마스터-크루는 30일 리부트 챌린지를 완주했을 때 도달하는 최종 등급입니다.
+// (리부트-크루는 결제 없이, 30일 리부트 챌린지를 시작하면 누구나 됩니다 - 아래 참고)
 const T_MASTER = parseInt(THRESHOLD_MASTER || "30", 10);
 const TZ = TIMEZONE || "Asia/Seoul";
 
@@ -63,48 +60,36 @@ const TZ = TIMEZONE || "Asia/Seoul";
 // 사라져 더 이상 아무도 새로 승급할 수 없는 상태였고, 커뮤니티 초간소화 개편에
 // 맞춰 역할·코드 모두 삭제했습니다.)
 
-// ── 전자책 결제(PayApp) 연동 ───────────────────────────────
-const PAYAPP_USERID = process.env.PAYAPP_USERID;
-const PAYAPP_LINKKEY = process.env.PAYAPP_LINKKEY;
-const PAYAPP_LINKVAL = process.env.PAYAPP_LINKVAL;
+// ── 전자책/워크북 무료 배포 ─────────────────────────────────
+// 이 커뮤니티는 결제가 없습니다. 전자책·워크북·30일 리부트 챌린지는 모두 무료이고,
+// 봇 DM에 "전자책"이라고 보내면 누구나 파일을 받을 수 있어요.
 const EBOOK_NAME = process.env.EBOOK_NAME || "로그아웃라이프 전자책";
-const EBOOK_PRICE = process.env.EBOOK_PRICE;
 const EBOOK_DOWNLOAD_URL = process.env.EBOOK_DOWNLOAD_URL || "";
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || "").replace(/\/+$/, "");
-const EBOOK_PURCHASE_COMMANDS = ["구매", "!구매", "전자책구매", "전자책 구매"];
-// 결제 전 소개/랜딩 페이지. 설정하면 DM "구매"에 결제 링크를 바로 주는 대신
-// 이 페이지 링크(본인 uid 포함)를 먼저 보내고, 페이지의 구매 버튼이
-// "/go/:discordUserId" 라우트를 거쳐 실제 결제 페이지로 연결됩니다.
-const LANDING_PAGE_URL = (process.env.LANDING_PAGE_URL || "").replace(/\/+$/, "");
+const EBOOK_FREE_COMMANDS = ["전자책", "!전자책", "워크북", "!워크북", "자료", "!자료", "자료받기", "!자료받기"];
 
-// ── 전자책 무료 미리보기 (파일 직접 첨부) ────────────────────
-const EBOOK_PREVIEW_COMMANDS = ["미리보기", "!미리보기", "전자책미리보기", "전자책 미리보기"];
-const EBOOK_PREVIEW_PATH = path.join(__dirname, "assets", "ebook_preview.pdf");
-
-// ── 전자책 원본 파일 저장 + 구매자별 워터마크 발급 ──────────────
-// 실제 판매되는 전자책 원본 PDF는 유출 방지를 위해 git 저장소에는 절대 커밋하지 않고,
+// ── 전자책 원본 파일 저장 (무료 배포용) ──────────────
+// 전자책 원본 PDF는 git 저장소에는 커밋하지 않고,
 // Railway 영구 볼륨(lib/store.js와 동일한 DATA_DIR)에만 저장합니다.
 // 운영진이 봇 DM으로 "!전자책원본업로드" + PDF 파일을 함께 보내면 그 파일로 저장/교체되고,
-// 이후 결제가 확인될 때마다 이 원본에 구매자 워터마크를 새로 입혀서 DM으로 보내드립니다.
+// 이후 멤버가 DM으로 "전자책"이라고 보내면 이 원본을 그대로 보내드립니다.
 const EBOOK_DATA_DIR = process.env.DATA_DIR || "/data";
 const EBOOK_MASTER_PATH = fs.existsSync(EBOOK_DATA_DIR)
   ? path.join(EBOOK_DATA_DIR, "ebook_master.pdf")
   : path.join(__dirname, "ebook_master.local.pdf"); // 볼륨이 없는 로컬 개발 환경용
 const EBOOK_UPLOAD_COMMAND = "!전자책원본업로드";
-const EBOOK_RESET_COMMAND = "!구매초기화";
-const EBOOK_PURCHASE_DELETE_COMMAND = "!구매기록삭제";
 const PROMOTION_ANNOUNCE_COMMAND = "!승급축하";
 
-// 판매 상품은 전자책 + 30일 워크북 "두 파일" 번들이라(랜딩페이지에도 "전자책과 워크북
+// 배포 자료는 전자책 + 30일 워크북 "두 파일" 번들이라(랜딩페이지에도 "전자책과 워크북
 // 두 파일 모두" 라고 명시되어 있음), 워크북도 전자책과 완전히 동일한 방식(원본 별도 업로드 +
-// 구매자별 워터마크 + DM 첨부 발송)으로 처리합니다.
+// DM 첨부 발송)으로 처리합니다.
 const WORKBOOK_NAME = process.env.WORKBOOK_NAME || "30일 리부트 챌린지 워크북";
 const WORKBOOK_MASTER_PATH = fs.existsSync(EBOOK_DATA_DIR)
   ? path.join(EBOOK_DATA_DIR, "workbook_master.pdf")
   : path.join(__dirname, "workbook_master.local.pdf");
 const WORKBOOK_UPLOAD_COMMAND = "!워크북원본업로드";
 
-// 워터마크 텍스트(한글 포함)를 이미지로 그려서 PDF에 얹기 위한 한글 폰트.
+// 캘린더 이미지 등을 그릴 때 쓰는 한글 폰트.
 // (pdf-lib에 직접 한글 폰트를 임베드하면 일부 글자가 깨지는 문제가 있어,
 // @napi-rs/canvas로 텍스트를 이미지로 렌더링한 뒤 그 이미지를 페이지에 얹는 방식을 씁니다.)
 const EBOOK_WATERMARK_FONT_PATH = path.join(__dirname, "assets", "fonts", "Pretendard-Regular.ttf");
@@ -418,8 +403,8 @@ function addDaysKST(dateStr /* YYYY-MM-DD */, n) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// ── 30일 리부트 챌린지 (전자책 구매자 대상 데일리 DM 챌린지) ────────────────
-// docs/reboot-challenge-plan.md 기획안 그대로 구현. 기존 기능(구매 플로우 등)에는
+// ── 30일 리부트 챌린지 (누구나 무료로 참여하는 데일리 DM 챌린지) ────────────────
+// docs/reboot-challenge-plan.md 기획안 그대로 구현. 기존 기능에는
 // 영향을 주지 않고, 새 DM 명령어/크론/파싱 분기만 독립적으로 추가합니다.
 // ══════════════════════════════════════════════════════════════════════════
 const REBOOT_START_COMMAND = "!챌린지시작";
@@ -430,7 +415,7 @@ const REBOOT_SHEET_BACKFILL_COMMAND = "!챌린지시트백필";
 const REBOOT_STATS_COMMAND = "!챌린지통계";
 const REBOOT_PROMPT_CRON = process.env.REBOOT_PROMPT_CRON || "0 20 * * *"; // 매일 20시 발송
 const REBOOT_REMINDER_CRON = process.env.REBOOT_REMINDER_CRON || "0 22 * * *"; // 매일 22시 리마인더
-const REBOOT_MORNING_CRON = process.env.REBOOT_MORNING_CRON || "0 9 * * *"; // 시작 초대 DM(1회) + Day7 다이제스트 안전망
+const REBOOT_MORNING_CRON = process.env.REBOOT_MORNING_CRON || "0 9 * * *"; // Day7 다이제스트 안전망
 const REBOOT_COOLDOWN_DAYS = 3;
 
 // SOS 키워드: Day 0에 적어둔 selfCompassionNote를 즉시 다시 보여주는 사적인 자기 진정 도구.
@@ -594,7 +579,7 @@ async function handleConfessionReply(message, content) {
 //
 // ⚠️ 참고: 기획 초안에서는 이 등급 사다리를 기존 ROLE_ID_GROW/ROLE_ID_MASTER에
 // 매핑하는 안을 검토했지만, 실제 코드를 보니 그 두 역할은 이미 다른 용도로
-// 고정돼 있었습니다 (GROW=전자책 구매, MASTER=30일 리부트 챌린지 완주). 그래서
+// 고정돼 있었습니다 (GROW=30일 리부트 챌린지 시작, MASTER=30일 리부트 챌린지 완주). 그래서
 // 이 등급 사다리는 기존 역할을 재사용하지 않고, 완전히 새로운 RANK_ROLE_ID_1~13
 // 역할 13개를 새로 만드는 걸로 바꿨습니다 — 기존 기능과 절대 안 겹칩니다.
 // ══════════════════════════════════════════════════════════════════════════
@@ -1217,7 +1202,7 @@ function scheduleMonthlyChallengeJobs() {
 // ── 데이 템플릿 ────────────────────────────────────────────────────────
 function rebootDay0Message() {
   return (
-    `🛬 REBOOT 구매하신 지 하루 됐네요. 30일 리부트 챌린지를 시작해볼까요?\n` +
+    `🛬 30일 리부트 챌린지를 시작해볼까요? (무료예요)\n` +
     `매일 저녁 8시에 짧은 질문 하나씩 드리고, 그대로 답장만 해주시면 돼요.\n` +
     `챌린지가 필요 없으시면 "챌린지그만"이라고 답장해주세요, 더 이상 안 보내드려요.\n\n` +
     `먼저 딱 하나만 적어주세요 — 무너지는 순간엔 판단력이 떨어져서, 그때 가서 다짐하는 건 소용이 없어요.\n` +
@@ -1375,9 +1360,6 @@ const client = new Client({
 
 client.once(Events.ClientReady, (c) => {
   console.log(`[봇 시작] ${c.user.tag} 로 로그인 완료`);
-  if (!PAYAPP_USERID || !PAYAPP_LINKKEY || !PAYAPP_LINKVAL || !EBOOK_PRICE || !PUBLIC_BASE_URL) {
-    console.warn("[설정 경고] PayApp 관련 환경변수가 부족해 전자책 자동결제/자동승급 기능이 동작하지 않습니다. .env.example을 참고해 채워주세요.");
-  }
   scheduleDailyJob();
   scheduleStreakReminderJob();
   scheduleWeeklyHighlightJob();
@@ -1396,7 +1378,7 @@ client.on(Events.MessageCreate, async (message) => {
   try {
     if (message.author.bot) return;
 
-    // DM 명령어 처리 (승급 공개 알림 옵트아웃/인 + 전자책 구매 + SOS 트리거/회고 응답)
+    // DM 명령어 처리 (알림 설정 + 전자책 무료 받기 + SOS 트리거/회고 응답)
     if (!message.guild) {
       const content = message.content.trim();
 
@@ -1416,21 +1398,12 @@ client.on(Events.MessageCreate, async (message) => {
         await handleNotifySettingCommand(message, notifyCmd);
       } else if (isRebootSosKeyword(content)) {
         await handleRebootSosKeyword(message);
-      } else if (EBOOK_PURCHASE_COMMANDS.includes(content)) {
-        await handleEbookPurchaseRequest(message);
-      } else if (EBOOK_PREVIEW_COMMANDS.includes(content)) {
-        await handleEbookPreviewRequest(message);
+      } else if (EBOOK_FREE_COMMANDS.includes(content)) {
+        await handleFreeFilesRequest(message);
       } else if (content === EBOOK_UPLOAD_COMMAND) {
         await handleEbookMasterUpload(message);
       } else if (content === WORKBOOK_UPLOAD_COMMAND) {
         await handleWorkbookMasterUpload(message);
-      } else if (content === EBOOK_RESET_COMMAND) {
-        await handleEbookPurchaseReset(message);
-      } else if (
-        content === EBOOK_PURCHASE_DELETE_COMMAND ||
-        content.startsWith(EBOOK_PURCHASE_DELETE_COMMAND + " ")
-      ) {
-        await handleEbookPurchaseDelete(message, content);
       } else if (
         content === PROMOTION_ANNOUNCE_COMMAND ||
         content.startsWith(PROMOTION_ANNOUNCE_COMMAND + " ")
@@ -1585,8 +1558,8 @@ client.on(Events.MessageCreate, async (message) => {
       );
     }
 
-    // (전자책을 구매하지 않은 "일반멤버"에게 부여되던 4단계 배지 시스템은 삭제되었습니다.
-    // 리부트-크루 승급은 전자책 구매로만 이루어집니다.)
+    // (챌린지를 시작하지 않은 "일반멤버"에게 부여되던 4단계 배지 시스템은 삭제되었습니다.
+    // 리부트-크루는 30일 리부트 챌린지를 시작하면 누구나 될 수 있어요.)
     // 마스터-크루 승급 기준 변경: 예전엔 "전자책 구매 후 누적 인증 T_MASTER회"였지만,
     // 지금은 "30일 리부트 챌린지 최초 완주"로만 승급합니다 (finalizeRebootCompletion 참고).
     // 이미 마스터-크루인 기존 유저는 소급 적용 없이 그대로 유지됩니다.
@@ -1753,7 +1726,7 @@ function describeNextLevelProgress(member, user) {
     return "";
   }
 
-  return `전자책을 구매하면 바로 리부트-크루로 승급되고, 다음 날부터 30일 리부트 챌린지가 시작돼요 (DM으로 "구매"라고 보내보세요).`;
+  return `봇 DM에 "${REBOOT_START_COMMAND}"라고 보내면 30일 리부트 챌린지가 무료로 시작되고, 시작하면 리부트-크루가 돼요. 완주하면 마스터-크루로 승급해요.`;
 }
 
 // ── SOS 트리거 기록 / 주간 회고: 어떤 명령어에도 안 걸리는 DM은
@@ -2198,80 +2171,20 @@ async function handleSosPatternHistoryRequest(message) {
   await message.reply(`🫂 최근 남기신 SOS 기록이에요 (총 ${all.length}개 중 최근 ${recent.length}개)\n\n${text}${insight}`);
 }
 
-// ── 전자책 구매(리부트-크루 승급) ────────────────────────────
-async function handleEbookPurchaseRequest(message) {
-  const user = getUser(message.author.id);
-
-  if (user.ebookPurchased) {
-    await message.reply("이미 전자책을 구매하고 리부트-크루로 승급하셨어요! 🎉");
-    return;
-  }
-
-  if (!PAYAPP_USERID || !PAYAPP_LINKKEY || !PAYAPP_LINKVAL || !EBOOK_PRICE || !PUBLIC_BASE_URL) {
-    await message.reply("아직 결제 기능이 준비 중이에요. 잠시만 기다려주세요!");
-    return;
-  }
-
-  // LANDING_PAGE_URL이 설정되어 있으면, 결제 링크를 바로 주는 대신
-  // 소개 페이지(본인 uid 포함)를 먼저 보냅니다. 페이지의 구매 버튼이
-  // "/go/:discordUserId"를 거쳐 그때그때 새 결제 링크를 받아 이동해요.
-  if (LANDING_PAGE_URL) {
-    const sep = LANDING_PAGE_URL.includes("?") ? "&" : "?";
-    const personalizedUrl = `${LANDING_PAGE_URL}${sep}uid=${message.author.id}`;
-    await message.reply(
-      `📘 **${EBOOK_NAME}** 소개 페이지예요 👇 (본인 전용 링크라 다른 분과 공유하지 말아주세요)\n${personalizedUrl}\n\n` +
-        `페이지를 다 보시고 "지금 리부트 시작하기" 버튼을 누르면 결제 페이지로 바로 넘어가요. 결제를 완료하시면,\n` +
-        `1) 자동으로 리부트-크루로 승급되고\n` +
-        `2) 전자책 다운로드 링크를 이 DM으로 바로 보내드려요.\n` +
-        `별도로 다시 뭘 누르실 필요 없이, 결제만 하시면 끝이에요!\n\n⚠️ **환불 정책**: 전자책(디지털 콘텐츠) 특성상 결제 완료 후에는 단순 변심에 의한 환불이 불가능해요. 결제 오류·중복 결제 등 판매자 귀책 사유가 있는 경우에만 이 채널을 통해 문의해주시면 확인 후 조치해드려요.\n\n🔒 **민감정보 안내**: 절제·재발 기록처럼 건강·성생활과 관련된 민감한 이야기는 서버 멤버 전체가 볼 수 있는 공개 채널(오늘의-기록, 힘든날-나눔, 자유토론 등)에서 나누게 돼요. 어디까지 공유할지는 직접 조절하실 수 있고, 운영진이 이 내용을 따로 캡처하거나 서버 밖으로 유출하지 않아요. 결제를 진행하시면 이 안내에 동의하신 것으로 볼게요.`
-    );
-    return;
-  }
-
-  // LANDING_PAGE_URL 미설정 시에는 기존 방식대로 결제 링크를 DM에 바로 보냅니다.
+// ── 전자책/워크북 무료 받기 (DM "전자책") ─────────────────────────
+async function handleFreeFilesRequest(message) {
   try {
-    const payUrl = await createPayAppPaymentLink(message.author.id);
-    if (!payUrl) {
-      await message.reply("결제 링크 생성에 실패했어요. 잠시 후 다시 시도해주세요.");
-      return;
-    }
-    await message.reply(
-      `📘 **${EBOOK_NAME}** 구매를 도와드릴게요! 아래 링크에서 바로 결제하시면 돼요 👇\n(본인 확인용 1회성 링크예요 — 다른 분과 공유하지 말아주세요)\n\n${payUrl}\n\n` +
-        `결제가 완료되면 이렇게 진행돼요.\n` +
-        `1️⃣ 자동으로 리부트-크루로 승급\n` +
-        `2️⃣ 전자책 다운로드 링크를 이 DM으로 바로 발송\n\n` +
-        `따로 누르실 것 없이, 결제만 완료하시면 끝이에요 🙂\n\n⚠️ 환불은 전자책(디지털 콘텐츠) 특성상 단순 변심 시엔 어려워요. 결제 오류·중복 결제처럼 저희 쪽 실수가 있었을 땐 언제든 이 채널로 말씀해주시면 바로 확인해드릴게요.\n\n🔒 절제·재발 같은 민감한 이야기는 서버 공개 채널(오늘의-기록, 힘든날-나눔, 자유토론 등)에서 나누게 돼요. 어디까지 나눌지는 항상 본인이 정하시고, 운영진이 따로 캡처하거나 유출하지 않아요. 결제를 진행하시면 이 내용에 동의하신 걸로 볼게요.`
-    );
+    await sendFreeFiles(message.author);
   } catch (e) {
-    console.error("[구매링크 생성 오류]", e);
-    await message.reply("결제 링크 생성 중 오류가 발생했어요. 잠시 후 다시 시도해주세요.");
-  }
-}
-// 무료 미리보기는 더 이상 파일을 DM으로 직접 보내지 않고, 구글폼(이메일 수집) 신청 페이지로 안내합니다.
-// 신청서 제출 후 확인 화면에서 /preview-download 로 바로 연결되어 PDF를 받을 수 있어요.
-const EBOOK_PREVIEW_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSeomkOO4-DNSXHDXR57csP2IDgNhGgYUHgJx12rMk815j06-Q/viewform";
-async function handleEbookPreviewRequest(message) {
-  try {
-    await message.reply(
-      `📖 **${EBOOK_NAME}** 무료 미리보기(프롤로그 + 1장 전체)는 아래 신청서 작성 후 바로 받으실 수 있어요!\n\n` +
-      `1️⃣ 아래 링크 눌러서 30초짜리 신청서 작성\n\n` +
-      `2️⃣ 이메일 남기고 안내 문구 확인 후 동의 체크\n\n` +
-      `3️⃣ 제출하자마자 그 자리에서 바로 PDF 다운로드 링크가 떠요\n\n` +
-      `👉 ${EBOOK_PREVIEW_FORM_URL}\n\n` +
-      `(#공지-규칙 채널에도 같은 안내가 있어요)\n\n` +
-      `전체 내용이 마음에 드시면 "${EBOOK_PURCHASE_COMMANDS[0]}"라고 보내주세요 🙂`
-    );
-  } catch (e) {
-    console.error("[전자책 미리보기 안내 전송 오류]", e);
-    await message.reply("미리보기 안내 전송 중 오류가 발생했어요. 잠시 후 다시 시도해주세요.");
+    console.error("[자료 전달 오류]", e);
+    await message.reply("자료를 보내는 중 오류가 발생했어요. 잠시 후 다시 시도해주세요.");
   }
 }
 
 // ── 운영진 전용: 전자책/워크북 원본 PDF 업로드/교체 (DM) ─────────────────
 // 사용법: 서버 운영자(길드 소유자)가 봇 DM에 "!전자책원본업로드" 또는 "!워크북원본업로드"
 // 메시지와 함께 PDF 파일을 첨부해서 보내면, 그 파일을 Railway 영구 볼륨에 저장합니다.
-// 이 파일들은 git 저장소에는 절대 올라가지 않고, 결제 확인 시마다 구매자 워터마크를
-// 새로 입혀서 DM으로 발송하는 데 쓰입니다.
+// 이 파일들은 git 저장소에는 올라가지 않고, 멤버가 DM으로 "전자책"이라고 보낼 때 그대로 전달됩니다.
 async function handleMasterUpload(message, { masterPath, uploadCommand, label }) {
   try {
     const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
@@ -2293,7 +2206,7 @@ async function handleMasterUpload(message, { masterPath, uploadCommand, label })
     fs.writeFileSync(masterPath, buf);
     await message.reply(
       `✅ ${label} 원본 파일을 저장했어요 (${(buf.length / 1024 / 1024).toFixed(2)}MB). ` +
-        `앞으로 결제가 확인되면 이 파일에 구매자 워터마크를 자동으로 입혀서 DM으로 보내드려요.`
+        `앞으로 멤버가 DM으로 "전자책"/"워크북"이라고 보내면 이 파일을 보내드려요.`
     );
   } catch (e) {
     console.error(`[${label} 원본 업로드 오류]`, e);
@@ -2317,107 +2230,7 @@ async function handleWorkbookMasterUpload(message) {
   });
 }
 
-// "!구매초기화" — 서버 운영자 전용. 테스트/환불 등의 사유로 본인 계정의
-// 전자책 구매 기록과 리부트-크루/마스터-크루 역할을 초기화해서, 처음 구매하는
-// 것처럼 다시 결제~전자책 발급 흐름을 테스트할 수 있게 해줍니다.
-async function handleEbookPurchaseReset(message) {
-  try {
-    const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
-    if (!guild || guild.ownerId !== message.author.id) {
-      await message.reply("이 명령어는 서버 운영자만 사용할 수 있어요.");
-      return;
-    }
-    const member = await guild.members.fetch(message.author.id).catch(() => null);
-    if (!member) {
-      await message.reply("서버 멤버 정보를 찾을 수 없어요. 서버에 가입되어 있는지 확인해주세요.");
-      return;
-    }
-
-    updateUser(message.author.id, { ebookPurchased: false, ebookPurchasedAt: null });
-
-    const removedRoles = [];
-    if (member.roles.cache.has(ROLE_ID_MASTER)) {
-      await member.roles.remove(ROLE_ID_MASTER).catch((e) => console.error("[역할제거 실패] 마스터-크루", e));
-      removedRoles.push("마스터-크루");
-    }
-    if (member.roles.cache.has(ROLE_ID_GROW)) {
-      await member.roles.remove(ROLE_ID_GROW).catch((e) => console.error("[역할제거 실패] 리부트-크루", e));
-      removedRoles.push("리부트-크루");
-    }
-
-    await message.reply(
-      `✅ 구매 기록을 초기화했어요.${removedRoles.length ? ` (${removedRoles.join(", ")} 역할 제거됨)` : " (제거할 역할은 없었어요)"}\n` +
-        `이제 "구매"라고 다시 보내시면 처음 구매하는 것처럼 결제 → 승급 → 전자책 발급 흐름을 처음부터 테스트하실 수 있어요.`
-    );
-  } catch (e) {
-    console.error("[구매 초기화 오류]", e);
-    await message.reply("초기화 중 오류가 발생했어요. 잠시 후 다시 시도해주세요.");
-  }
-}
-
-// "!구매기록삭제 @유저" (또는 "!구매기록삭제 유저ID") — 서버 운영자 전용.
-// 환불/중복결제/오류 등의 사유로 특정 멤버의 전자책 구매 상태를 되돌리고,
-// 리부트-크루/마스터-크루 역할을 제거합니다.
-//
-// 주의:
-// - PayApp 등 결제 게이트웨이 쪽 실제 결제 취소/환불은 이 명령어로 처리되지 않아요.
-//   돈이 오간 부분은 PayApp 관리자 페이지에서 별도로 처리해야 합니다.
-// - processedPayments(결제 중복처리 방지 기록)는 mul_no(결제요청번호) 단위로만 저장되어
-//   유저와 직접 연결돼 있지 않아서, 이 명령어로는 건드리지 않습니다. 같은 결제건으로
-//   재구매를 다시 테스트하게 하려면 별도로 알려주세요.
-// - 대상 멤버에게 자동으로 DM을 보내지 않습니다. 알려야 한다면 직접 연락해주세요.
-async function handleEbookPurchaseDelete(message, content) {
-  try {
-    const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
-    if (!guild || guild.ownerId !== message.author.id) {
-      await message.reply("이 명령어는 서버 운영자만 사용할 수 있어요.");
-      return;
-    }
-
-    const targetUser = await resolveMentionedUser(message, content, EBOOK_PURCHASE_DELETE_COMMAND, guild);
-    if (!targetUser) {
-      await message.reply(
-        `대상 유저를 찾을 수 없어요. "${EBOOK_PURCHASE_DELETE_COMMAND} @유저" 형태로 멘션하거나, ` +
-          `"${EBOOK_PURCHASE_DELETE_COMMAND} 유저ID"처럼 디스코드 유저 ID를 붙여서 다시 보내주세요. ` +
-          `(DM에서는 유저네임 자동완성이 안 될 수 있어서, ID로 보내시는 게 제일 확실해요.)`
-      );
-      return;
-    }
-
-    const targetMember = await guild.members.fetch(targetUser.id).catch(() => null);
-
-    updateUser(targetUser.id, { ebookPurchased: false, ebookPurchasedAt: null });
-
-    const removedRoles = [];
-    if (targetMember) {
-      if (targetMember.roles.cache.has(ROLE_ID_MASTER)) {
-        await targetMember.roles.remove(ROLE_ID_MASTER).catch((e) => console.error("[역할제거 실패] 마스터-크루", e));
-        removedRoles.push("마스터-크루");
-      }
-      if (targetMember.roles.cache.has(ROLE_ID_GROW)) {
-        await targetMember.roles.remove(ROLE_ID_GROW).catch((e) => console.error("[역할제거 실패] 리부트-크루", e));
-        removedRoles.push("리부트-크루");
-      }
-    }
-
-    await message.reply(
-      `✅ ${targetUser.tag || targetUser.username}님의 구매 기록을 삭제했어요.` +
-        `${
-          removedRoles.length
-            ? ` (${removedRoles.join(", ")} 역할 제거됨)`
-            : targetMember
-            ? " (제거할 역할은 없었어요)"
-            : " (서버에서 멤버 정보를 찾지 못해 역할은 건드리지 않았어요)"
-        }\n` +
-        `⚠️ PayApp 등 실제 결제 취소는 이 명령어로 처리되지 않아요. 필요하면 결제 관리자 페이지에서 별도로 처리해주세요. 대상 유저에게는 DM을 보내지 않았어요.`
-    );
-  } catch (e) {
-    console.error("[구매기록 삭제 오류]", e);
-    await message.reply("구매 기록 삭제 중 오류가 발생했어요. 잠시 후 다시 시도해주세요.");
-  }
-}
-
-// 관리자 DM 명령어(!구매기록삭제, !승급축하 등) 뒤에 붙은 멘션(@유저) 또는 디스코드 유저 ID/
+// 관리자 DM 명령어(!승급축하 등) 뒤에 붙은 멘션(@유저) 또는 디스코드 유저 ID/
 // 유저네임으로 대상 유저를 찾습니다. DM 안에서는 서버 멤버 멘션 자동완성이 안 될 수 있어서,
 // <@ID>를 직접 타이핑했거나 순수 ID/유저네임을 붙여 보낸 경우까지 함께 지원합니다.
 async function resolveMentionedUser(message, content, command, guild) {
@@ -2442,8 +2255,8 @@ async function resolveMentionedUser(message, content, command, guild) {
 }
 
 // "!승급축하 @유저" (또는 "!승급축하 유저ID") — 서버 운영자 전용.
-// 결제/리액션 등 실제 이벤트를 다시 태우지 않고도, 봇이 평소 승급 때 쓰는 것과 똑같은
-// 형식으로 공개 축하 메시지를 지금 바로 올리게 합니다. (예: 결제는 확인됐는데 이미 예전에
+// 리액션 등 실제 이벤트를 다시 태우지 않고도, 봇이 평소 승급 때 쓰는 것과 똑같은
+// 형식으로 공개 축하 메시지를 지금 바로 올리게 합니다. (예: 챌린지는 시작했는데 이미 예전에
 // 역할을 갖고 있어서 announcePromotion이 자동으로 스킵된 경우, 운영자가 수동으로 역할을
 // 부여한 경우 등)
 //
@@ -2506,94 +2319,11 @@ async function handlePromotionAnnounce(message, content) {
   }
 }
 
-// ── 구매자 전용 워터마크가 삽입된 PDF 생성 (전자책/워크북 공용) ───────
-// masterPath의 원본을 읽어, 모든 페이지 하단에 작은 텍스트로("LOGOUTLIFE" 브랜드 +
-// 구매자 식별 정보), 중앙에는 큼직하고 옅은 대각선 텍스트로 "LOGOUTLIFE" 브랜드 워터마크를
-// 새겨넣습니다. 파일이 유출되더라도 어느 구매자에게서 나갔는지, 그리고 어느 브랜드의
-// 콘텐츠인지 바로 알아볼 수 있게 하기 위함입니다.
-const WATERMARK_BRAND = process.env.WATERMARK_BRAND || "LOGOUTLIFE";
-
-async function generateWatermarkedPdf(masterPath, buyerLabel) {
-  const { PDFDocument } = require("pdf-lib");
-  const { createCanvas } = require("@napi-rs/canvas");
-  const masterBytes = fs.readFileSync(masterPath);
-  const pdfDoc = await PDFDocument.load(masterBytes);
-  const footerStamp = `${WATERMARK_BRAND} · ${buyerLabel} 전용 구매본 · 무단 배포·재판매 금지 · ${todayKST()}`;
-  const centerStamp = `${WATERMARK_BRAND} · ${buyerLabel}`;
-
-  // 페이지 크기(가로x세로)별로 워터마크 오버레이 이미지를 한 번만 만들어 재사용합니다.
-  // (같은 이미지를 페이지마다 새로 embed하면 페이지 수만큼 파일 용량이 불어나기 때문에,
-  // 임베드된 이미지 객체 자체를 캐시해서 여러 페이지가 같은 이미지를 참조하게 합니다.)
-  const overlayImageCache = new Map();
-
-  for (const page of pdfDoc.getPages()) {
-    const { width, height } = page.getSize();
-    const cacheKey = `${Math.round(width)}x${Math.round(height)}`;
-    let overlayImage = overlayImageCache.get(cacheKey);
-    if (!overlayImage) {
-      const scale = 2; // 레티나 화질용 2배 렌더링
-      const canvas = createCanvas(Math.round(width * scale), Math.round(height * scale));
-      const ctx = canvas.getContext("2d");
-      ctx.scale(scale, scale);
-
-      // 하단 각주 워터마크
-      ctx.font = `9px ${EBOOK_WATERMARK_FONT_FAMILY}`;
-      ctx.fillStyle = "rgba(120,120,120,0.75)";
-      ctx.textAlign = "left";
-      ctx.textBaseline = "alphabetic";
-      ctx.fillText(footerStamp, 20, height - 14);
-
-      // 중앙 대각선 워터마크
-      ctx.save();
-      ctx.translate(width / 2, height / 2);
-      ctx.rotate((-35 * Math.PI) / 180);
-      ctx.font = `bold 30px ${EBOOK_WATERMARK_FONT_FAMILY}`;
-      ctx.fillStyle = "rgba(150,150,150,0.30)";
-      ctx.textAlign = "center";
-      ctx.fillText(centerStamp, 0, 0);
-      ctx.restore();
-
-      const pngBytes = canvas.toBuffer("image/png");
-      overlayImage = await pdfDoc.embedPng(pngBytes);
-      overlayImageCache.set(cacheKey, overlayImage);
-    }
-    page.drawImage(overlayImage, { x: 0, y: 0, width, height });
-  }
-  return Buffer.from(await pdfDoc.save());
-}
-
-async function createPayAppPaymentLink(discordUserId) {
-  const params = new URLSearchParams({
-    cmd: "payrequest",
-    userid: PAYAPP_USERID,
-    goodname: EBOOK_NAME,
-    price: String(EBOOK_PRICE),
-    recvphone: "01000000000", // PayApp API 필수값이나, smsuse=n 이라 실제 문자는 발송되지 않습니다.
-    smsuse: "n",
-    var1: discordUserId, // 결제완료 웹훅에서 이 값으로 디스코드 유저를 식별합니다.
-    feedbackurl: `${PUBLIC_BASE_URL}/payapp/feedback`,
-  });
-
-  const res = await fetch("https://api.payapp.kr/oapi/apiLoad.html", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: params.toString(),
-  });
-  const text = await res.text();
-  const parsed = new URLSearchParams(text);
-
-  if (parsed.get("state") !== "1") {
-    console.error("[PayApp 결제요청 실패]", text);
-    return null;
-  }
-  return decodeURIComponent(parsed.get("payurl") || "");
-}
-
-// ── 대용량 워터마크 PDF 다운로드 링크 (Discord DM 첨부 용량 제한 우회) ──────
-// Discord DM 첨부파일에는 용량 제한이 있어서, 원본 PDF에 이미지가 많으면 워터마크를
-// 입힌 뒤에도 그 제한(DiscordAPIError 40005 "Request entity too large")을 넘을 수
+// ── 대용량 PDF 다운로드 링크 (Discord DM 첨부 용량 제한 우회) ──────
+// Discord DM 첨부파일에는 용량 제한이 있어서, 원본 PDF에 이미지가 많으면
+// 그 제한(DiscordAPIError 40005 "Request entity too large")을 넘을 수
 // 있습니다. 그런 경우 파일을 직접 첨부하는 대신, 이 서버가 잠깐 호스팅해주는
-// 구매자 전용(추측 불가능한 토큰) 다운로드 링크를 DM으로 보내드립니다.
+// 추측 불가능한 토큰 다운로드 링크를 DM으로 보내드립니다.
 const DISCORD_ATTACHMENT_SAFE_LIMIT = 7 * 1024 * 1024; // 7MB - Discord DM 첨부 제한보다 여유 있게 안전선으로 잡음
 const downloadTokens = new Map(); // token -> { buffer, filename, createdAt }
 const DOWNLOAD_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7일 후 자동 만료
@@ -2604,43 +2334,36 @@ setInterval(() => {
   }
 }, 60 * 60 * 1000).unref();
 
-// ── 구매자에게 전자책+워크북 전달 (워터마크 PDF 우선, 없으면 다운로드 링크로 대체) ──
-// 판매 상품은 "전자책 + 30일 워크북" 두 파일 번들이라, 원본이 업로드된 파일들을 모두
-// 워터마크 처리해서 한 DM에 같이 첨부해 보냅니다.
-// (링크와 달리 복사해서 다른 사람에게 전달해도, 유출 시 워터마크로 누구 파일인지 바로 추적돼요.)
-// 단, 워터마크 입힌 파일이 DISCORD_ATTACHMENT_SAFE_LIMIT보다 크면 Discord가 첨부를
-// 거부하므로(40005 오류), 그런 파일은 대신 위 다운로드 링크로 보내드립니다.
-// 아직 운영진이 원본 파일을 업로드하지 않은 항목이 있으면, 그 항목만 안내 문구로 대신합니다.
-// 워크북은 용량이 커서(원본에 이미지/워크시트가 많음) 매번 크기 검사를 거치지 않고
-// 항상 다운로드 링크로만 보내도록 alwaysLink로 고정했습니다.
-const PURCHASED_ITEMS = [
+// ── 전자책+워크북 무료 전달 ─────────────────────────────────────
+// 원본 PDF를 그대로 DM에 첨부합니다(워터마크 없음). 파일이 커서 Discord 첨부 제한을
+// 넘거나 워크북처럼 항상 링크로 보내기로 한 파일은, 이 서버가 잠깐 호스팅하는
+// 추측 불가능한 토큰 다운로드 링크로 대신 보냅니다.
+const FREE_ITEMS = [
   { name: EBOOK_NAME, masterPath: EBOOK_MASTER_PATH },
   { name: WORKBOOK_NAME, masterPath: WORKBOOK_MASTER_PATH, alwaysLink: true },
 ];
 
-async function sendEbookToBuyer(member) {
-  const buyerLabel = member.user.tag || member.user.username;
+async function sendFreeFiles(user) {
   const attachments = [];
   const downloadLinks = [];
   const notReadyItems = [];
 
-  for (const item of PURCHASED_ITEMS) {
+  for (const item of FREE_ITEMS) {
     if (!fs.existsSync(item.masterPath)) {
       notReadyItems.push(item.name);
       continue;
     }
     try {
-      const watermarked = await generateWatermarkedPdf(item.masterPath, buyerLabel);
-      if ((item.alwaysLink || watermarked.length > DISCORD_ATTACHMENT_SAFE_LIMIT) && PUBLIC_BASE_URL) {
-        // 파일이 너무 커서 DM에 직접 첨부하면 Discord가 거부하므로, 다운로드 링크로 대체합니다.
+      const buf = fs.readFileSync(item.masterPath);
+      if ((item.alwaysLink || buf.length > DISCORD_ATTACHMENT_SAFE_LIMIT) && PUBLIC_BASE_URL) {
         const token = crypto.randomUUID();
-        downloadTokens.set(token, { buffer: watermarked, filename: `${item.name}.pdf`, createdAt: Date.now() });
+        downloadTokens.set(token, { buffer: buf, filename: `${item.name}.pdf`, createdAt: Date.now() });
         downloadLinks.push({ name: item.name, url: `${PUBLIC_BASE_URL}/dl/${token}` });
       } else {
-        attachments.push(new AttachmentBuilder(watermarked, { name: `${item.name}.pdf` }));
+        attachments.push(new AttachmentBuilder(buf, { name: `${item.name}.pdf` }));
       }
     } catch (e) {
-      console.error(`[${item.name} 워터마크 파일 생성 오류]`, e);
+      console.error(`[${item.name} 파일 준비 오류]`, e);
       notReadyItems.push(item.name);
     }
   }
@@ -2648,83 +2371,44 @@ async function sendEbookToBuyer(member) {
   if (attachments.length || downloadLinks.length) {
     const deliveredNames = [...attachments.map((a) => a.name.replace(/\.pdf$/, "")), ...downloadLinks.map((l) => l.name)];
     const linksNote = downloadLinks.length
-      ? "\n\n" + downloadLinks.map((l) => `📥 ${l.name} 다운로드: ${l.url}\n(용량이 커서 파일 대신 다운로드 링크로 보내드려요. 본인만 사용해주세요.)`).join("\n")
+      ? "\n\n" + downloadLinks.map((l) => `📥 ${l.name} 다운로드: ${l.url}\n(용량이 커서 파일 대신 링크로 보내드려요. 링크는 7일간 유효해요.)`).join("\n")
       : "";
-    const notReadyNote = notReadyItems.length
-      ? `\n\n※ ${notReadyItems.join(", ")}는 준비되는 대로 곧 별도로 보내드릴게요.`
-      : "";
-    await member.send({
-      content:
-        `📘 구매하신 파일이에요! (${deliveredNames.join(" + ")})\n` +
-        `이 파일들에는 **${buyerLabel}** 님 전용 워터마크가 삽입되어 있어요. 개인 소장용으로만 사용해주시고, ` +
-        `무단 배포·재판매·공유는 삼가주세요 — 유출 시 구매자 추적이 가능해요 🙏` +
-        linksNote +
-        notReadyNote,
+    const notReadyNote = notReadyItems.length ? `\n\n※ ${notReadyItems.join(", ")}는 준비되는 대로 곧 보내드릴게요.` : "";
+    await user.send({
+      content: `📘 무료로 받아가세요! (${deliveredNames.join(" + ")})\n마음에 드셨다면 주변에 필요한 분께 이 커뮤니티를 알려주세요 🙏` + linksNote + notReadyNote,
       files: attachments,
     });
     return;
   }
 
-  // 원본이 하나도 준비되지 않았을 때만 기존 다운로드 링크(설정돼 있다면)로 대체합니다.
   if (EBOOK_DOWNLOAD_URL) {
-    await safeDM(
-      member,
-      `📘 **${EBOOK_NAME}** 다운로드 링크예요 👇\n${EBOOK_DOWNLOAD_URL}\n\n` +
-        `※ 이 링크는 본인만 사용해주시고, 다른 사람과 공유하지 말아주세요.`
-    );
+    await user.send(`📘 **${EBOOK_NAME}** 다운로드 링크예요 👇\n${EBOOK_DOWNLOAD_URL}`).catch(() => {});
   } else {
-    console.warn(`[전자책/워크북 전달 실패] 원본 파일도, EBOOK_DOWNLOAD_URL도 설정되어 있지 않아 ${member.user.tag}에게 파일을 전달하지 못했습니다.`);
-    await safeDM(member, `구매하신 파일은 확인 후 곧 별도로 보내드릴게요. 잠시만 기다려주세요!`);
+    await user.send("자료는 준비되는 대로 곧 보내드릴게요. 잠시만 기다려주세요!").catch(() => {});
   }
 }
 
-async function promoteToGrowCrewByEbook(discordUserId) {
-  try {
-    const guild = await client.guilds.fetch(GUILD_ID);
-    const member = await guild.members.fetch(discordUserId).catch(() => null);
-    if (!member) {
-      console.error(`[전자책 승급 실패] 길드에서 멤버를 찾을 수 없음: ${discordUserId}`);
-      return;
-    }
-    // 주의: 예전엔 "이미 리부트-크루 역할이 있으면" 여기서 그냥 return 해버려서,
-    // (운영자가 테스트 등으로 역할을 미리 수동 부여해둔 경우) 실제 결제가 들어와도
-    // 구매 확인 DM/전자책 다운로드 링크가 전혀 발송되지 않는 버그가 있었습니다.
-    // 중복 웹훅 방지는 어차피 웹훅 단의 mul_no 기반 isPaymentProcessed()가 이미 담당하므로,
-    // 여기서는 역할 유무와 상관없이 결제가 확인되면 항상 DM을 보내도록 수정했습니다.
-    const alreadyHadGrowRole = member.roles.cache.has(ROLE_ID_GROW);
-
-    if (!alreadyHadGrowRole) {
-      await member.roles.add(ROLE_ID_GROW).catch((e) => console.error("[역할부여 실패] 리부트-크루(전자책)", e));
-    }
-    await safeDM(
-      member,
-      `전자책 구매가 확인됐어요! 리부트-크루로 승급했어요 🎉\n` +
-        `SOS 요청이 올라오면 도움을 요청받는 헬퍼 알림 대상에도 포함됐어요.\n` +
-        `#함께-만들기 채널에서 새로운 아이디어나 초안을 가장 먼저 보고 의견 남기실 수 있어요.`
-    );
-
-    await sendEbookToBuyer(member);
-    if (!alreadyHadGrowRole) {
-      await announcePromotion(guild, member, "리부트-크루");
-    }
-
-    // (예전엔 여기서 "구매 이전 누적 인증이 T_MASTER회를 넘으면 즉시 마스터-크루 승급"을
-    // 처리했지만, 마스터-크루 승급 기준이 "30일 리부트 챌린지 최초 완주"로 바뀌면서 삭제했습니다.
-    // 30일 리부트 챌린지는 이 함수가 끝난 뒤 별도로(본인이 !챌린지시작을 보내면) 시작됩니다.)
-  } catch (e) {
-    console.error("[전자책 승급 처리 오류]", e);
-  }
+// 30일 리부트 챌린지를 시작하면 누구나 리부트-크루가 됩니다(무료). 이미 역할이 있으면 아무것도 하지 않아요.
+async function grantRebootCrewRole(member) {
+  if (!ROLE_ID_GROW || !member || member.roles.cache.has(ROLE_ID_GROW)) return;
+  await member.roles.add(ROLE_ID_GROW).catch((e) => console.error("[역할부여 실패] 리부트-크루(챌린지 시작)", e));
+  await safeDM(
+    member,
+    `리부트-크루가 되었어요 🎉\nSOS 요청이 올라오면 도움을 요청받는 헬퍼 알림 대상에도 포함돼요(원치 않으면 "도움알림끄기").\n#함께-만들기 채널에서 새로운 아이디어를 가장 먼저 보고 의견 남기실 수 있어요.`
+  );
+  const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
+  if (guild) await announcePromotion(guild, member, "리부트-크루");
 }
 
-// ── PayApp 결제완료 웹훅 수신 서버 ────────────────────────────
+// ── 웹서버: 상태 확인, 대용량 파일 다운로드, 소개(랜딩) 페이지 ─────────
 const app = express();
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
 app.get("/", (req, res) => res.status(200).send("OK"));
 
-// 대용량 워터마크 PDF 다운로드 링크 (구매자 전용, 추측 불가능한 토큰 기반).
-// sendEbookToBuyer에서 파일이 Discord 첨부 용량 제한을 넘을 때만 이 링크를 만들어 보냅니다.
+// 대용량 PDF 다운로드 링크 (추측 불가능한 토큰 기반).
+// sendFreeFiles에서 파일이 Discord 첨부 용량 제한을 넘을 때만 이 링크를 만들어 보냅니다.
 app.get("/dl/:token", (req, res) => {
   const entry = downloadTokens.get(req.params.token);
   if (!entry) {
@@ -2737,155 +2421,14 @@ app.get("/dl/:token", (req, res) => {
   res.send(entry.buffer);
 });
 
-// 전자책 소개 랜딩페이지를 직접 서빙합니다 (외부 사이트 의존 없이,
-// 로그인 없이 누구나 바로 볼 수 있어요). ?uid=디스코드유저ID를 붙이면
-// 페이지 내 구매 버튼이 본인 전용 결제 링크로 자동 연결됩니다.
+// 소개 랜딩페이지를 직접 서빙합니다 (로그인 없이 누구나 볼 수 있어요).
 app.get("/landing", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "landing.html"));
 });
 
-// 무료 미리보기(프롤로그 + 1장) PDF를 로그인/DM 없이 누구나 받을 수 있게 공개 서빙합니다.
-// 구글폼(이메일 수집) 제출 후 확인 화면에서 이 주소로 바로 연결하는 용도입니다.
-// 디스코드 DM "미리보기" 명령어와 같은 파일을 그대로 내려주는 것뿐이라, 결제/워터마크
-// 로직과는 완전히 무관합니다.
-app.get("/preview-download", (req, res) => {
-  if (!fs.existsSync(EBOOK_PREVIEW_PATH)) {
-    res.status(404).send("미리보기 파일을 찾을 수 없어요. 운영자에게 문의해주세요.");
-    return;
-  }
-  res.download(EBOOK_PREVIEW_PATH, "로그아웃라이프_REBOOT_미리보기.pdf");
-});
-
-app.post("/payapp/feedback", async (req, res) => {
-  // PayApp은 이 엔드포인트가 정확히 'SUCCESS' 응답을 주지 않으면 재시도하므로,
-  // 처리 중 어떤 오류가 나도 일단 200 SUCCESS는 보내고 로그로만 남깁니다.
-  try {
-    const body = req.body || {};
-    console.log("[PayApp 웹훅 수신]", JSON.stringify(body));
-
-    if (!PAYAPP_USERID || !PAYAPP_LINKKEY || !PAYAPP_LINKVAL) {
-      console.error("[PayApp 웹훅] 서버에 PayApp 검증키가 설정되어 있지 않습니다.");
-      return res.status(200).send("SUCCESS");
-    }
-
-    const isAuthentic =
-      String(body.userid) === PAYAPP_USERID &&
-      String(body.linkkey) === PAYAPP_LINKKEY &&
-      String(body.linkval) === PAYAPP_LINKVAL;
-
-    if (!isAuthentic) {
-      console.error("[PayApp 웹훅] 인증값(userid/linkkey/linkval) 불일치 - 위조 요청 가능성, 무시합니다.");
-      return res.status(200).send("SUCCESS");
-    }
-
-    if (String(body.pay_state) !== "4") {
-      // 4 = 결제완료. 그 외(취소/대기 등)는 무시.
-      return res.status(200).send("SUCCESS");
-    }
-
-    const mulNo = body.mul_no;
-    const discordUserId = body.var1;
-
-    if (!discordUserId) {
-      console.error("[PayApp 웹훅] var1(디스코드 유저ID)이 비어있습니다.", mulNo);
-      return res.status(200).send("SUCCESS");
-    }
-
-    if (mulNo && isPaymentProcessed(mulNo)) {
-      return res.status(200).send("SUCCESS"); // 이미 처리한 결제건 - 중복 무시
-    }
-    if (mulNo) markPaymentProcessed(mulNo);
-
-    updateUser(discordUserId, { ebookPurchased: true, ebookPurchasedAt: new Date().toISOString() });
-    await promoteToGrowCrewByEbook(discordUserId);
-
-    // 세금/장부 정리용 매출 자동 기록 - 닉네임은 best-effort로만 붙이고,
-    // 이 기록이 실패하거나 늦어져도 결제 처리 응답(SUCCESS)에는 영향 없게 fire-and-forget으로 둡니다.
-    (async () => {
-      let label = discordUserId;
-      try {
-        const guild = await client.guilds.fetch(GUILD_ID);
-        const member = await guild.members.fetch(discordUserId).catch(() => null);
-        if (member) label = member.displayName;
-      } catch (e) {
-        console.error("[매출 기록] 닉네임 조회 실패", e);
-      }
-      appendSalesEvent({
-        discordUserId,
-        label,
-        goodName: body.goodname || EBOOK_NAME,
-        price: body.price || EBOOK_PRICE,
-        mulNo: mulNo || "",
-      }).catch((e) => console.error("[매출 기록 오류]", e));
-    })();
-
-    res.status(200).send("SUCCESS");
-  } catch (e) {
-    console.error("[PayApp 웹훅 처리 오류]", e);
-    res.status(200).send("SUCCESS");
-  }
-});
-
-// ── 랜딩페이지 구매 버튼 → 결제 페이지 리다이렉트 ────────────────
-// 랜딩페이지의 구매 버튼이 이 주소로 연결됩니다. PayApp 결제 링크는
-// 1회용이라 미리 만들어두지 않고, 버튼을 누른 바로 이 시점에 새로 생성해서
-// 곧장 그 결제 페이지로 이동(302)시킵니다. 비밀키(PAYAPP_LINKKEY 등)는
-// 이 서버 밖으로 절대 나가지 않습니다.
-app.get("/go/:discordUserId", async (req, res) => {
-  const discordUserId = (req.params.discordUserId || "").trim();
-  const backToDiscordMsg =
-    "디스코드로 돌아가서 봇에게 다시 \"구매\"라고 DM을 보내주세요.";
-
-  if (!discordUserId) {
-    return res.status(400).send(`요청이 올바르지 않아요. ${backToDiscordMsg}`);
-  }
-
-  try {
-    // 결제 링크를 만들기 전에, 이 ID가 실제로 디스코드 서버에 있는 멤버인지 먼저 확인합니다.
-    // 이 확인 없이 바로 결제 링크를 만들면, 존재하지 않거나 서버를 나간 ID로도 결제가
-    // 진행돼버려서 "결제는 됐는데 파일도 승급도 안 가는" 사고로 이어질 수 있습니다.
-    let member = null;
-    try {
-      const guild = await client.guilds.fetch(GUILD_ID);
-      member = await guild.members.fetch(discordUserId).catch(() => null);
-    } catch (e) {
-      console.error("[/go 멤버 확인 오류]", e);
-    }
-    if (!member) {
-      return res
-        .status(403)
-        .send(
-          `이 링크는 디스코드 서버 멤버일 때만 사용할 수 있어요. 먼저 디스코드 서버에 참여하신 뒤, 봇에게 DM으로 "구매"라고 보내주세요 — 그러면 본인 전용 결제 링크를 새로 보내드려요.`
-        );
-    }
-
-    const user = getUser(discordUserId);
-    if (user.ebookPurchased) {
-      return res
-        .status(200)
-        .send("이미 구매를 완료하고 리부트-크루로 승급하셨어요! 디스코드로 돌아가서 DM으로 받은 전자책·워크북을 확인해보세요.");
-    }
-
-    if (!PAYAPP_USERID || !PAYAPP_LINKKEY || !PAYAPP_LINKVAL || !EBOOK_PRICE || !PUBLIC_BASE_URL) {
-      return res.status(503).send(`아직 결제 기능이 준비 중이에요. ${backToDiscordMsg}`);
-    }
-
-    const payUrl = await createPayAppPaymentLink(discordUserId);
-    if (!payUrl) {
-      console.error("[/go 리다이렉트] 결제 링크 생성 실패", discordUserId);
-      return res.status(502).send(`결제 링크 생성에 실패했어요. ${backToDiscordMsg}`);
-    }
-
-    res.redirect(302, payUrl);
-  } catch (e) {
-    console.error("[/go 리다이렉트 오류]", e);
-    res.status(500).send(`오류가 발생했어요. ${backToDiscordMsg}`);
-  }
-});
-
 const HTTP_PORT = process.env.PORT || 3000;
 app.listen(HTTP_PORT, () => {
-  console.log(`[웹서버 시작] PayApp 웹훅 서버가 ${HTTP_PORT} 포트에서 대기중`);
+  console.log(`[웹서버 시작] ${HTTP_PORT} 포트에서 대기중`);
 });
 
 // ── SOS 온콜 에스컬레이션: 지정한 채널에 온콜 역할을 태그해서 사람이 직접 챙기게 함 ──
@@ -3028,7 +2571,7 @@ client.on(Events.MessageReactionRemove, async (reaction, reactUser) => {
 
 // ── 매일 정기 점검: 월간 리포트(선택형) ──
 // (미기록 독려 DM, 가입 D+1/D+3 온보딩 DM은 스팸처럼 느껴질 수 있어 제거했습니다, 2026-10.
-//  결제전환 DM 시퀀스도 앞서 삭제됨. 월간 리포트는 "리포트켜기"를 보낸 사람에게만 갑니다.)
+//  결제 관련 기능은 모두 삭제됨(무료 커뮤니티). 월간 리포트는 "리포트켜기"를 보낸 사람에게만 갑니다.)
 function scheduleDailyJob() {
   const expr = DAILY_CRON || "0 9 * * *";
   cron.schedule(expr, () => runDailyJob().catch((e) => console.error("[dailyJob 오류]", e)), { timezone: TZ });
@@ -3480,14 +3023,10 @@ async function startRebootChallengeDay0(discordUserId, member, attemptNumber) {
   await safeDM(member, rebootDay0Message());
 }
 
-// ── 참가자 명령어: !챌린지시작 (최초 시작 / 재도전 / 옵트아웃 후 재개) ──
+// ── 참가자 명령어: !챌린지시작 (누구나 무료 · 최초 시작 / 재도전 / 옵트아웃 후 재개) ──
 async function handleRebootStartCommand(message) {
   const discordUserId = message.author.id;
   const user = getUser(discordUserId);
-  if (!user.ebookPurchased) {
-    await message.reply(`이 챌린지는 전자책 구매자 전용이에요. 먼저 "구매"라고 보내서 전자책을 구매해주세요.`);
-    return;
-  }
   const rc = user.rebootChallenge;
   const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
   const member = guild ? await guild.members.fetch(discordUserId).catch(() => null) : null;
@@ -3504,6 +3043,7 @@ async function handleRebootStartCommand(message) {
     return;
   }
   await message.reply("좋아요, 지금부터 리부트 챌린지를 시작할게요! 👇");
+  await grantRebootCrewRole(member);
   await startRebootChallengeDay0(discordUserId, member, (rc.attemptNumber || 0) + 1);
 }
 
@@ -3567,7 +3107,7 @@ async function finalizeRebootCompletion(discordUserId, member) {
       // [신규 2026-09, sim님 요청] 30일 리부트 챌린지도 "30일을 해낸" 건 매달챌린지와
       // 똑같으므로, 매달챌린지 누적 완주 개월에도 +1 크레딧을 줍니다. 이 블록은
       // masterCrewGrantedAt이 아직 없을 때 딱 한 번만 실행되므로(위 if문), 중복 적립되지
-      // 않습니다. 이렇게 하면 전자책 구매자가 리부트 챌린지만 하고 끝내는 게 아니라,
+      // 않습니다. 이렇게 하면 챌린지 참가자가 리부트 챌린지만 하고 끝내는 게 아니라,
       // 곧바로 직급 등급의 첫 단계(주임)까지 도달한 상태로 매달챌린지를 이어갈 수 있어서
       // "또 30일을 처음부터 해야 하나"라는 동기 저하를 줄여줍니다.
       await finalizeMonthlyChallengeCompletion(discordUserId, m).catch((e) =>
@@ -3868,33 +3408,15 @@ async function handleRebootMissedAndAdvance(discordUserId, member) {
   });
 }
 
-// ── 09시: 시작 초대 DM(1회) + Day7→8 분석 다이제스트 안전망 ─────────────────
-// 챌린지는 자동으로 시작하지 않습니다. 구매 다음 날 "시작하고 싶으면 !챌린지시작" 안내를
-// 딱 한 번만 보내고, 실제 시작은 본인이 명령어를 보냈을 때만 합니다.
+// ── 09시: Day7→8 분석 다이제스트 안전망 ─────────────────────────────
+// 챌린지는 자동으로 시작되지 않습니다. 본인이 "!챌린지시작"을 보낼 때만 시작해요.
 async function runRebootMorningJob() {
   const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
   if (!guild) return;
-  const now = new Date();
 
   for (const userId of allUserIds()) {
-    const user = getUser(userId);
-    if (!user.ebookPurchased || !user.ebookPurchasedAt) continue;
-    const rc = user.rebootChallenge;
-
-    if (!rc.status) {
-      if (user.rebootInviteSentAt) continue; // 초대는 평생 1회
-      const daysSincePurchase = daysBetween(new Date(user.ebookPurchasedAt), now);
-      if (daysSincePurchase >= 1) {
-        const member = await guild.members.fetch(userId).catch(() => null);
-        if (!member || member.user.bot) continue;
-        await safeDM(
-          member,
-          `📘 전자책 읽어주셔서 고마워요. 준비되셨다면 30일 리부트 챌린지를 시작해볼 수 있어요. 시작하려면 이 DM에 "${REBOOT_START_COMMAND}"라고 보내주세요. 매일 저녁 8시에 질문이 하나씩 와요. 지금 하고 싶지 않으면 그냥 두셔도 괜찮고, 이 안내는 다시 보내지 않을게요.`
-        );
-        updateUser(userId, { rebootInviteSentAt: new Date().toISOString() });
-      }
-      continue;
-    }
+    const rc = getUser(userId).rebootChallenge;
+    if (!rc || !rc.status) continue;
 
     // 원래 발송 지점은 여기(아침 9시)였는데, 이제는 handleRebootCheckinReply에서
     // Day7 답장이 오는 즉시 실시간으로 보냅니다. 이 블록은 그 실시간 발송이 어떤 이유로든
