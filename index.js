@@ -61,11 +61,15 @@ const TZ = TIMEZONE || "Asia/Seoul";
 // 맞춰 역할·코드 모두 삭제했습니다.)
 
 // ── 전자책/워크북 무료 배포 ─────────────────────────────────
-// 이 커뮤니티는 결제가 없습니다. 전자책·워크북·30일 리부트 챌린지는 모두 무료이고,
-// 봇 DM에 "전자책"이라고 보내면 누구나 파일을 받을 수 있어요.
+// 이 봇은 결제를 처리하지 않습니다. 결제는 별도 랜딩페이지에서 이뤄지고, 구매자는 랜딩페이지가 알려주는
+// 비밀 입장 링크(/join/...)로 들어와 30일 리부트 챌린지(폼 방식)를 시작합니다. 구매자(리부트-크루)는
+// 봇 DM에 "전자책"이라고 보내 파일을 다시 받을 수 있어요.
 const EBOOK_NAME = process.env.EBOOK_NAME || "로그아웃라이프 전자책";
 const EBOOK_DOWNLOAD_URL = process.env.EBOOK_DOWNLOAD_URL || "";
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || "").replace(/\/+$/, "");
+// 전자책 구매자 전용 챌린지: 랜딩페이지(구매 안내) 주소, 디스코드 OAuth 시크릿, 서버 초대 링크
+const PURCHASE_LANDING_URL = process.env.PURCHASE_LANDING_URL || "";
+const DISCORD_INVITE_URL = process.env.DISCORD_INVITE_URL || "";
 const EBOOK_FREE_COMMANDS = ["전자책", "!전자책", "워크북", "!워크북", "자료", "!자료", "자료받기", "!자료받기"];
 
 // ── 전자책 원본 파일 저장 (무료 배포용) ──────────────
@@ -1365,7 +1369,8 @@ client.once(Events.ClientReady, (c) => {
   scheduleWeeklyHighlightJob();
   // scheduleWeeklyTipJob(); // 주간 팁/회고 DM은 스팸처럼 느껴질 수 있어 비활성화했습니다 (2026-10)
   scheduleInsightReminderJob();
-  scheduleRebootChallengeJobs();
+  scheduleRcJobs();
+  // scheduleRebootChallengeJobs(); // 대화형 DM 챌린지는 폼 방식(lib/rc.js)으로 대체되어 더 이상 등록하지 않습니다 (2026-10)
   scheduleMonthlyChallengeJobs();
   // scheduleConvoStarterJob(); // 월·수·금 #자유수다 대화거리 질문은 비활성화했습니다 (2026-10)
 });
@@ -1398,6 +1403,12 @@ client.on(Events.MessageCreate, async (message) => {
         await handleNotifySettingCommand(message, notifyCmd);
       } else if (isRebootSosKeyword(content)) {
         await handleRebootSosKeyword(message);
+      } else if (REBOOT_OPT_OUT_PHRASES.includes(content)) {
+        await handleRcPause(message);
+      } else if (content.startsWith(PURCHASE_CONFIRM_COMMAND)) {
+        await handlePurchaseConfirm(message, content);
+      } else if (content === JOIN_LINK_COMMAND || content === JOIN_LINK_ROTATE_COMMAND || content === RC_ADMIN_COMMAND) {
+        await handleRcOwnerCommand(message, content);
       } else if (EBOOK_FREE_COMMANDS.includes(content)) {
         await handleFreeFilesRequest(message);
       } else if (content === EBOOK_UPLOAD_COMMAND) {
@@ -1412,13 +1423,13 @@ client.on(Events.MessageCreate, async (message) => {
       } else if (content === REBOOT_ANALYSIS_COMMAND || content.startsWith(REBOOT_ANALYSIS_COMMAND + " ")) {
         await handleRebootAnalysisCommand(message, content);
       } else if (content === REBOOT_STATUS_COMMAND || content.startsWith(REBOOT_STATUS_COMMAND + " ")) {
-        await handleRebootStatusCommand(message, content);
+        await handleRcOwnerCommand(message, RC_ADMIN_COMMAND);
       } else if (content === REBOOT_SHEET_BACKFILL_COMMAND) {
         await handleRebootSheetBackfillCommand(message);
       } else if (content === REBOOT_STATS_COMMAND) {
-        await handleRebootStatsCommand(message);
+        await handleRcStatsCommand(message);
       } else if (content === REBOOT_START_COMMAND) {
-        await handleRebootStartCommand(message);
+        await handleRcStartCommand(message);
       } else if (content === "회고" || content === "!회고") {
         await handleReflectionHistoryRequest(message);
       } else if (content === "패턴" || content === "!패턴") {
@@ -1707,26 +1718,18 @@ function describeNextLevelProgress(member, user) {
   }
 
   if (member.roles.cache.has(ROLE_ID_GROW)) {
-    const rc = user.rebootChallenge;
-    if (!rc || !rc.status) {
-      return `봇 DM에 "${REBOOT_START_COMMAND}"라고 보내면 "30일 리부트 챌린지"를 시작할 수 있어요. 이 챌린지를 완주하면 마스터-크루로 승급해요.`;
+    const pr = rcApi.progress(member.id);
+    if (!pr) {
+      return `전자책 구매자 전용 30일 리부트 챌린지는 봇 DM에 "${REBOOT_START_COMMAND}"라고 보내면 시작할 수 있어요. 완주하면 마스터-크루로 승급해요.`;
     }
-    if (rc.status === "in_progress" || rc.status === "pending_day0") {
-      return `지금 30일 리부트 챌린지 진행 중이에요 (Day ${rc.currentDay}/31). 완주하면 마스터-크루로 승급해요!`;
-    }
-    if (rc.status === "completed") {
-      return "🏆 30일 리부트 챌린지를 완주해서 마스터-크루가 되셨어요!";
-    }
-    if (rc.status === "failed") {
-      return `리부트 챌린지가 중단됐었어요. ${rc.cooldownUntil ? `${rc.cooldownUntil}부터 ` : ""}"${REBOOT_START_COMMAND}"라고 보내시면 다시 도전할 수 있어요.`;
-    }
-    if (rc.status === "opted_out") {
-      return `리부트 챌린지를 쉬고 계세요. "${REBOOT_START_COMMAND}"라고 보내시면 다시 시작할 수 있어요.`;
-    }
-    return "";
+    if (pr.status === "completed") return "🏆 30일 리부트 챌린지를 완주했어요!";
+    if (pr.status === "paused") return `리부트 챌린지를 쉬고 계세요. "${REBOOT_START_COMMAND}"라고 보내시면 이어서 할 수 있어요.`;
+    return `지금 30일 리부트 챌린지 Day ${pr.cur}, 기록한 날 ${pr.recorded}일이에요. 이어서 하기 👉 ${pr.url}`;
   }
 
-  return `봇 DM에 "${REBOOT_START_COMMAND}"라고 보내면 30일 리부트 챌린지가 무료로 시작되고, 시작하면 리부트-크루가 돼요. 완주하면 마스터-크루로 승급해요.`;
+  return PURCHASE_LANDING_URL
+    ? `전자책을 구매하면 구매자 전용 30일 리부트 챌린지에 참여하고 리부트-크루가 돼요. 👉 ${PURCHASE_LANDING_URL}`
+    : "전자책 구매자는 구매 후 안내받은 입장 링크로 30일 리부트 챌린지를 시작하고 리부트-크루가 돼요.";
 }
 
 // ── SOS 트리거 기록 / 주간 회고: 어떤 명령어에도 안 걸리는 DM은
@@ -1734,12 +1737,8 @@ function describeNextLevelProgress(member, user) {
 async function handlePendingDmReply(message, content) {
   if (!content) return;
 
-  // 30일 리부트 챌린지 체크인 답장이 최우선입니다 (SOS 키워드는 상위 라우터에서 이미 처리됨).
-  const handledByReboot = await handleRebootCheckinReply(message, content).catch((e) => {
-    console.error("[리부트 챌린지 답장 처리 오류]", e);
-    return false;
-  });
-  if (handledByReboot) return;
+  // (예전 대화형 리부트 챌린지 체크인 답장 처리는 폼 방식으로 대체되어 더 이상 호출하지 않습니다.
+  // handleRebootCheckinReply 함수는 참고용으로만 남아 있습니다.)
 
   // 매달 30일 챌린지(금딸챌린지) 체크인 답장도 다른 파싱보다 먼저 확인합니다.
   const handledByMonthlyChallenge = await handleMonthlyChallengeCheckinReply(message, content).catch((e) => {
@@ -2172,8 +2171,23 @@ async function handleSosPatternHistoryRequest(message) {
 }
 
 // ── 전자책/워크북 무료 받기 (DM "전자책") ─────────────────────────
+// 전자책 구매자인지: 챌린지 참가자이거나, 예전에 구매 처리된 기록이 있거나, 서버 운영자(테스트용)
+async function isEbookBuyer(uid) {
+  if (rcApi.isBuyer(uid) || getUser(uid).ebookPurchased) return true;
+  const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
+  return !!guild && guild.ownerId === uid;
+}
+
+function notBuyerText() {
+  return `이 기능은 전자책 구매자 전용이에요.${PURCHASE_LANDING_URL ? `\n👉 ${PURCHASE_LANDING_URL}` : ""}\n이미 구매하셨다면 구매 후 안내받은 입장 링크로 들어오시거나, 안내받은 코드로 봇 DM에 "${PURCHASE_CONFIRM_COMMAND} <코드>"를 보내주세요.`;
+}
+
 async function handleFreeFilesRequest(message) {
   try {
+    if (!(await isEbookBuyer(message.author.id))) {
+      await message.reply(notBuyerText());
+      return;
+    }
     await sendFreeFiles(message.author);
   } catch (e) {
     console.error("[자료 전달 오류]", e);
@@ -2375,7 +2389,7 @@ async function sendFreeFiles(user) {
       : "";
     const notReadyNote = notReadyItems.length ? `\n\n※ ${notReadyItems.join(", ")}는 준비되는 대로 곧 보내드릴게요.` : "";
     await user.send({
-      content: `📘 무료로 받아가세요! (${deliveredNames.join(" + ")})\n마음에 드셨다면 주변에 필요한 분께 이 커뮤니티를 알려주세요 🙏` + linksNote + notReadyNote,
+      content: `📘 구매해주셔서 감사해요. 자료 보내드려요! (${deliveredNames.join(" + ")})` + linksNote + notReadyNote,
       files: attachments,
     });
     return;
@@ -2425,6 +2439,201 @@ app.get("/dl/:token", (req, res) => {
 app.get("/landing", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "landing.html"));
 });
+
+// ── 전자책 구매자 전용 30일 리부트 챌린지 (폼 방식, lib/rc.js) ───────────────
+// 흐름: 랜딩페이지(결제는 거기서) → 비밀 입장 링크(/join/...) → 디스코드 로그인 → 서버 입장 + 리부트-크루
+// → 참가자 개인 주소(/c/...)에서 하루 한 장씩 폼 작성·제출 → 운영자 관리 페이지(/admin)에 모임.
+const PURCHASE_CONFIRM_COMMAND = "!구매확인"; // 로그인 연동(OAuth) 없이 쓰는 대체 입장: "!구매확인 <입장코드>"
+const JOIN_LINK_COMMAND = "!구매링크"; // 운영자: 랜딩페이지에 넣을 입장 링크 확인
+const JOIN_LINK_ROTATE_COMMAND = "!구매링크재발급"; // 운영자: 링크가 새어나갔을 때 재발급
+const RC_ADMIN_COMMAND = "!챌린지관리"; // 운영자: 관리 페이지 주소
+
+const rcApi = require("./lib/rc").init({
+  app,
+  config: {
+    baseUrl: PUBLIC_BASE_URL,
+    clientId: () => process.env.DISCORD_CLIENT_ID || (client.user && client.user.id) || "",
+    clientSecret: process.env.DISCORD_CLIENT_SECRET || "",
+    inviteUrl: DISCORD_INVITE_URL,
+  },
+  hooks: {
+    notifyOwner: (text) => notifyOwnerText(String(text).slice(0, 1990)),
+    dmUser: async (uid, text) => {
+      try {
+        const u = await client.users.fetch(uid);
+        await u.send(String(text).slice(0, 1990));
+        return true;
+      } catch (e) {
+        console.warn(`[챌린지 DM 실패] ${uid} - DM이 막혀있을 수 있어요.`);
+        return false;
+      }
+    },
+    // 로그인한 구매자를 서버에 자동 입장시킵니다(이미 멤버면 그대로 둠).
+    joinGuild: async (uid, accessToken) => {
+      const guild = await client.guilds.fetch(GUILD_ID);
+      const existing = await guild.members.fetch(uid).catch(() => null);
+      if (existing) return { ok: true, already: true };
+      try {
+        await guild.members.add(uid, { accessToken, roles: [ROLE_ID_GROW] });
+        return { ok: true };
+      } catch (e) {
+        console.error("[구매자 서버 입장 실패]", e);
+        return { ok: false };
+      }
+    },
+    onBuyer: async (uid, name, isNew) => {
+      const u = getUser(uid);
+      updateUser(uid, { ebookPurchased: true, ebookPurchasedAt: u.ebookPurchasedAt || new Date().toISOString() });
+      const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
+      const member = guild ? await guild.members.fetch(uid).catch(() => null) : null;
+      if (!member) return;
+      if (!member.roles.cache.has(ROLE_ID_GROW)) {
+        await member.roles.add(ROLE_ID_GROW).catch((e) => console.error("[역할부여 실패] 리부트-크루(구매자 입장)", e));
+        if (isNew) await announcePromotion(guild, member, "리부트-크루");
+      }
+    },
+    onComplete: async (uid) => finalizeRcCompletion(uid),
+    // 완주는 1인 1회: 예전 대화형 챌린지를 이미 완주한 사람은 새로 시작할 수 없어요.
+    canStart: async (uid) => {
+      const old = getUser(uid).rebootChallenge;
+      return !(old && (old.completedAt || old.masterCrewGrantedAt));
+    },
+  },
+});
+
+const ONCE_ONLY_TEXT = "챌린지는 완주할 때까지는 몇 번이든 다시 시작할 수 있지만, 이미 완주한 계정은 다시 시작할 수 없어요. 쌓은 기록과 시스템 1페이지는 계속 쓰실 수 있어요. 궁금한 점은 운영자에게 말해주세요.";
+
+// 30일 완주: 마스터-크루 승급 + 매달챌린지 1개월 인정(최초 1회). 예전 대화형 챌린지로 이미 받은 사람은 중복 적립하지 않아요.
+async function finalizeRcCompletion(uid) {
+  try {
+    const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
+    const m = guild ? await guild.members.fetch(uid).catch(() => null) : null;
+    const legacy = getUser(uid).rebootChallenge && getUser(uid).rebootChallenge.masterCrewGrantedAt;
+    const firstTime = rcApi.markMasterGranted(uid);
+    if (m && !m.roles.cache.has(ROLE_ID_MASTER)) {
+      await m.roles.add(ROLE_ID_MASTER).catch((e) => console.error("[역할부여 실패] 마스터-크루(챌린지 완주)", e));
+      if (guild) await announcePromotion(guild, m, "마스터-크루");
+    }
+    if (firstTime && !legacy) {
+      await finalizeMonthlyChallengeCompletion(uid, m).catch((e) => console.error("[리부트→매달챌린지 등급 브릿지 오류]", e));
+    }
+    const pr = rcApi.progress(uid);
+    if (m) {
+      await safeDM(
+        m,
+        `🏆 30일을 마치셨어요. 기록한 날 ${pr ? pr.recorded : ""}일, 마스터-크루가 되셨어요.\n완주는 30일 연속이 아니라 '기록하고 돌아온 날 수'예요. 오늘 한 칸 더 걸었으면 충분해요.${firstTime && !legacy ? `\n\n🎁 매달 30일 챌린지 쪽 직급 등급에도 완주 1개월로 인정해드렸어요. "${MONTHLY_CHALLENGE_COMMAND}"로 이어갈 수 있어요.` : ""}\n\n완주 기록 👉 ${pr ? pr.url + "/complete" : ""}`
+      );
+    }
+  } catch (e) {
+    console.error("[챌린지 완주 처리 오류]", e);
+  }
+}
+
+async function isGuildOwner(uid) {
+  const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
+  return !!guild && guild.ownerId === uid;
+}
+
+async function handleRcStartCommand(message) {
+  const uid = message.author.id;
+  if (!rcApi.getParticipant(uid)) {
+    if (!(await isEbookBuyer(uid))) {
+      await message.reply(notBuyerText());
+      return;
+    }
+    // 예전 방식으로 구매 처리된 분 · 운영자(테스트)는 여기서 바로 참가자로 등록합니다.
+    const started = await rcApi.onBuyerJoin(uid, message.author.globalName || message.author.username);
+    if (started.used) {
+      await message.reply(ONCE_ONLY_TEXT);
+      return;
+    }
+    await message.reply("챌린지를 시작했어요. 방금 보낸 DM의 링크에서 시작 전 체크(Day 0)부터 해주세요.");
+    return;
+  }
+  const pr = rcApi.progress(uid);
+  if (pr.status === "paused") {
+    rcApi.resume(uid);
+    await message.reply(`다시 이어갈게요. 쉬기 전까지의 기록은 그대로 있어요 👉 ${rcApi.progress(uid).url}`);
+  } else {
+    await message.reply(`내 챌린지 링크예요 (나만의 주소예요, 공유하지 마세요) 👉 ${pr.url}`);
+  }
+}
+
+async function handleRcPause(message) {
+  if (rcApi.pause(message.author.id)) {
+    await message.reply(`쉬는 중으로 바꿨어요. 매일 보내던 DM은 멈춰요. 기록은 그대로 있어요. 다시 하고 싶을 때 "${REBOOT_START_COMMAND}"라고 보내주세요.`);
+  } else {
+    await message.reply("진행 중인 챌린지가 없어요.");
+  }
+}
+
+const confirmAttempts = new Map();
+async function handlePurchaseConfirm(message, content) {
+  const uid = message.author.id;
+  const now = Date.now();
+  const recent = (confirmAttempts.get(uid) || []).filter((t) => now - t < 10 * 60 * 1000);
+  recent.push(now);
+  confirmAttempts.set(uid, recent);
+  if (recent.length > 5) {
+    await message.reply("시도 횟수가 많아요. 10분 뒤에 다시 시도해주세요.");
+    return;
+  }
+  const code = content.slice(PURCHASE_CONFIRM_COMMAND.length).trim();
+  if (!rcApi.verifyJoinToken(code)) {
+    await message.reply("코드가 맞지 않아요. 구매 후 안내받은 입장 링크 속 코드(링크 맨 끝 글자)를 그대로 붙여 보내주세요.");
+    return;
+  }
+  const { p, isNew, used } = await rcApi.onBuyerJoin(uid, message.author.globalName || message.author.username);
+  if (used) {
+    await message.reply(ONCE_ONLY_TEXT);
+    return;
+  }
+  await message.reply(isNew ? "확인됐어요! 리부트-크루가 되셨고 챌린지가 시작됐어요. 방금 보낸 DM의 링크에서 시작해주세요." : `이미 참여 중이에요. 내 링크 👉 ${rcApi.personalUrl(p)}`);
+}
+
+async function handleRcOwnerCommand(message, content) {
+  if (!(await isGuildOwner(message.author.id))) {
+    await message.reply("이 명령어는 서버 운영자만 사용할 수 있어요.");
+    return;
+  }
+  if (!PUBLIC_BASE_URL) {
+    await message.reply("PUBLIC_BASE_URL(이 봇의 공개 주소)이 설정되어 있지 않아 링크를 만들 수 없어요. Railway 변수에서 설정해주세요.");
+    return;
+  }
+  if (content === JOIN_LINK_COMMAND) {
+    await message.reply(
+      `구매자 입장 링크예요. 랜딩페이지의 결제 완료 버튼/안내에 이 주소를 넣어주세요 👇\n${rcApi.joinUrl()}\n\n` +
+        (process.env.DISCORD_CLIENT_SECRET
+          ? "디스코드 로그인 연동이 켜져 있어요."
+          : "⚠️ DISCORD_CLIENT_SECRET이 없어서 로그인 연동이 꺼져 있어요. 지금은 링크를 열면 \"!구매확인 코드\" 안내만 나와요.") +
+        `\n링크가 새어나갔다면 "${JOIN_LINK_ROTATE_COMMAND}"로 재발급하세요(이미 들어온 분은 그대로).`
+    );
+  } else if (content === JOIN_LINK_ROTATE_COMMAND) {
+    rcApi.rotateJoinToken();
+    await message.reply(`입장 링크를 재발급했어요. 이전 링크는 이제 안 열려요. 랜딩페이지의 주소도 바꿔주세요 👇\n${rcApi.joinUrl()}`);
+  } else {
+    const st = rcApi.stats();
+    await message.reply(`챌린지 관리 페이지예요 (이 주소는 운영자만 보세요) 👇\n${rcApi.adminUrl()}\n\n참가자 ${st.total}명 · 진행 중 ${st.active}명 · 쉬는 중 ${st.paused}명 · 완주 ${st.completed}명 · 안 읽은 기록 ${st.unread}건`);
+  }
+}
+
+async function handleRcStatsCommand(message) {
+  if (!(await isGuildOwner(message.author.id))) {
+    await message.reply("이 명령어는 서버 운영자만 사용할 수 있어요.");
+    return;
+  }
+  const st = rcApi.stats();
+  await message.reply(`챌린지 참가자 ${st.total}명 · 진행 중 ${st.active}명 · 쉬는 중 ${st.paused}명 · 완주 ${st.completed}명 · 안 읽은 기록 ${st.unread}건\n자세한 내용은 "${RC_ADMIN_COMMAND}"로 관리 페이지 주소를 받으세요.`);
+}
+
+// 매일 저녁 8시: 오늘의 링크 DM / 매일 아침 9시: 운영자 하루 요약 DM
+function scheduleRcJobs() {
+  const daily = process.env.RC_DAILY_CRON || "0 20 * * *";
+  const summary = process.env.RC_SUMMARY_CRON || "0 9 * * *";
+  cron.schedule(daily, () => rcApi.sendDailyLinks().catch((e) => console.error("[챌린지 일일 링크 발송 오류]", e)), { timezone: TZ });
+  cron.schedule(summary, () => rcApi.sendOwnerSummary().catch((e) => console.error("[챌린지 운영자 요약 오류]", e)), { timezone: TZ });
+  console.log(`[예약 등록] 리부트 챌린지(폼) cron: 일일 링크 "${daily}" / 운영자 요약 "${summary}" (${TZ})`);
+}
 
 const HTTP_PORT = process.env.PORT || 3000;
 app.listen(HTTP_PORT, () => {
@@ -3051,12 +3260,19 @@ async function handleRebootStartCommand(message) {
 async function handleRebootSosKeyword(message) {
   const user = getUser(message.author.id);
   const note = user.rebootChallenge && user.rebootChallenge.selfCompassionNote;
-  if (note) {
+  const plan = rcApi.comebackPlan(message.author.id);
+  if (plan && (plan.letter || plan.min1 || plan.hour1)) {
+    // 챌린지 Day 26(편지)·Day 27(첫 1분/1시간/24시간 계획)에서 직접 적은 내용을 바로 보여줍니다.
+    const parts = [];
+    if (plan.letter) parts.push(`💌 미리 써둔 편지예요:\n\n${plan.letter.slice(0, 1500)}`);
+    const steps = [plan.min1 && `첫 1분: ${plan.min1}`, plan.hour1 && `첫 1시간: ${plan.hour1}`, plan.day1 && `첫 24시간: ${plan.day1}`].filter(Boolean);
+    if (steps.length) parts.push(`📋 내가 정해둔 돌아오는 길:\n${steps.join("\n")}`);
+    if (plan.contact) parts.push(`연락할 사람: ${plan.contact}`);
+    await message.reply(parts.join("\n\n").slice(0, 1900));
+  } else if (note) {
     await message.reply(`🛬 적어두신 문장이에요:\n\n"${note}"\n\n지금 이 순간, 이거 하나면 충분해요.`);
   } else {
-    await message.reply(
-      `아직 적어두신 문장이 없어요. 리부트 챌린지를 시작하면 Day 0에서 그 문장을 적을 수 있어요.\n지금 당장은 — 잠깐 숨 한 번 크게 쉬어보세요. 이 순간은 지나가요.`
-    );
+    await message.reply(`잠깐 숨 한 번 크게 쉬어보세요. 이 순간은 지나가요.`);
   }
   await startImpulseTimer(message);
   const sosTriggers = [...(user.sosTriggers || []), { date: todayKST(), note: "(SOS 키워드로 충동 타이머 시작)" }];
