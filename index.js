@@ -2417,7 +2417,14 @@ async function grantRebootCrewRole(member) {
 // ── 웹서버: 상태 확인, 대용량 파일 다운로드, 소개(랜딩) 페이지 ─────────
 const app = express();
 app.use(express.urlencoded({ extended: true }));
-app.use(express.json());
+// 랜딩 서버가 보내는 서명 요청(/api/purchases)은 본문 원문 그대로 HMAC을 검증해야 해서 원문을 같이 보관합니다.
+app.use(
+  express.json({
+    verify: (req, res, buf) => {
+      if (req.url && req.url.startsWith("/api/purchases")) req.rawBody = buf.toString("utf8");
+    },
+  })
+);
 
 app.get("/", (req, res) => res.status(200).send("OK"));
 
@@ -2456,6 +2463,9 @@ const rcApi = require("./lib/rc").init({
     clientId: () => process.env.DISCORD_CLIENT_ID || (client.user && client.user.id) || "",
     clientSecret: process.env.DISCORD_CLIENT_SECRET || "",
     inviteUrl: DISCORD_INVITE_URL,
+    landingSecret: process.env.LANDING_BOT_SECRET || "", // 랜딩 서버와 공유하는 서명 비밀키(없으면 구매 연동 API가 꺼져요)
+    // 예전 공용 입장 링크(/join/<공용코드>)와 "!구매확인 <코드>". 기존 구매자를 모두 옮긴 뒤 false로 끄세요. 기본값 true.
+    legacyJoinEnabled: () => !/^(false|0|no|off)$/i.test(String(process.env.LEGACY_JOIN_ENABLED || "true").trim()),
   },
   hooks: {
     notifyOwner: (text) => notifyOwnerText(String(text).slice(0, 1990)),
@@ -2494,6 +2504,31 @@ const rcApi = require("./lib/rc").init({
       }
     },
     onComplete: async (uid) => finalizeRcCompletion(uid),
+    // 환불: 리부트-크루·마스터-크루 등급을 회수하고 구매자 표시를 거둡니다(챌린지 기록 삭제는 lib/rc.js가 처리).
+    // 서버를 나가 있거나 등급이 없으면 할 일이 없어서 ok로 둡니다. 등급 제거에 실패하면 ok:false를 돌려줘 운영자에게 알립니다.
+    revokeAccess: async (uid) => {
+      let ok = true;
+      let master = false;
+      try {
+        updateUser(uid, { ebookPurchased: false, ebookRevokedAt: new Date().toISOString() });
+      } catch (e) {
+        ok = false;
+        console.error("[환불] 구매자 표시 해제 실패", e && e.message);
+      }
+      const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
+      const member = guild ? await guild.members.fetch(uid).catch(() => null) : null;
+      if (member) {
+        for (const [roleId, label] of [[ROLE_ID_GROW, "리부트-크루"], [ROLE_ID_MASTER, "마스터-크루"]]) {
+          if (!member.roles.cache.has(roleId)) continue;
+          if (roleId === ROLE_ID_MASTER) master = true;
+          await member.roles.remove(roleId).catch((e) => {
+            ok = false;
+            console.error(`[역할회수 실패] ${label} (환불)`, e && e.message);
+          });
+        }
+      }
+      return { ok, master };
+    },
     // 완주는 1인 1회: 예전 대화형 챌린지를 이미 완주한 사람은 새로 시작할 수 없어요.
     canStart: async (uid) => {
       const old = getUser(uid).rebootChallenge;
@@ -2502,6 +2537,7 @@ const rcApi = require("./lib/rc").init({
   },
 });
 
+const REFUNDED_TEXT = "환불 처리된 구매라 챌린지를 이어갈 수 없어요. 다시 참여하려면 새로 구매한 뒤 받은 개인 입장 링크를 이용해주세요.";
 const ONCE_ONLY_TEXT = "챌린지는 완주할 때까지는 몇 번이든 다시 시작할 수 있지만, 이미 완주한 계정은 다시 시작할 수 없어요. 쌓은 기록과 시스템 1페이지는 계속 쓰실 수 있어요. 궁금한 점은 운영자에게 말해주세요.";
 
 // 30일 완주: 마스터-크루 승급 + 매달챌린지 1개월 인정(최초 1회). 예전 대화형 챌린지로 이미 받은 사람은 중복 적립하지 않아요.
@@ -2544,6 +2580,10 @@ async function handleRcStartCommand(message) {
     }
     // 예전 방식으로 구매 처리된 분 · 운영자(테스트)는 여기서 바로 참가자로 등록합니다.
     const started = await rcApi.onBuyerJoin(uid, message.author.globalName || message.author.username);
+    if (started.revoked) {
+      await message.reply(REFUNDED_TEXT);
+      return;
+    }
     if (started.used) {
       await message.reply(ONCE_ONLY_TEXT);
       return;
@@ -2580,11 +2620,19 @@ async function handlePurchaseConfirm(message, content) {
     return;
   }
   const code = content.slice(PURCHASE_CONFIRM_COMMAND.length).trim();
+  if (!rcApi.legacyJoinEnabled()) {
+    await message.reply("이 명령어는 더 이상 쓰지 않아요. 구매 후 받은 개인 입장 링크를 눌러 디스코드로 로그인해주세요. 링크를 받지 못했다면 서버 운영자에게 알려주세요.");
+    return;
+  }
   if (!rcApi.verifyJoinToken(code)) {
     await message.reply("코드가 맞지 않아요. 구매 후 안내받은 입장 링크 속 코드(링크 맨 끝 글자)를 그대로 붙여 보내주세요.");
     return;
   }
-  const { p, isNew, used } = await rcApi.onBuyerJoin(uid, message.author.globalName || message.author.username);
+  const { p, isNew, used, revoked } = await rcApi.onBuyerJoin(uid, message.author.globalName || message.author.username);
+  if (revoked) {
+    await message.reply(REFUNDED_TEXT);
+    return;
+  }
   if (used) {
     await message.reply(ONCE_ONLY_TEXT);
     return;
@@ -2601,7 +2649,11 @@ async function handleRcOwnerCommand(message, content) {
     await message.reply("PUBLIC_BASE_URL(이 봇의 공개 주소)이 설정되어 있지 않아 링크를 만들 수 없어요. Railway 변수에서 설정해주세요.");
     return;
   }
-  if (content === JOIN_LINK_COMMAND) {
+  if (content === JOIN_LINK_COMMAND && !rcApi.legacyJoinEnabled()) {
+    await message.reply(
+      `예전 공용 입장 링크는 꺼져 있어요(LEGACY_JOIN_ENABLED=false). 이제 구매자마다 랜딩 서버가 결제 확인 후 개인 1회용 링크를 발급해요(POST ${PUBLIC_BASE_URL}/api/purchases). 공용 링크가 필요하면 Railway 변수 LEGACY_JOIN_ENABLED를 true로 바꾸세요.`
+    );
+  } else if (content === JOIN_LINK_COMMAND) {
     await message.reply(
       `구매자 입장 링크예요. 랜딩페이지의 결제 완료 버튼/안내에 이 주소를 넣어주세요 👇\n${rcApi.joinUrl()}\n\n` +
         (process.env.DISCORD_CLIENT_SECRET
