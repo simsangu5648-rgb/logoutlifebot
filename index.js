@@ -1407,7 +1407,7 @@ client.on(Events.MessageCreate, async (message) => {
         await handleRcPause(message);
       } else if (content.startsWith(PURCHASE_CONFIRM_COMMAND)) {
         await handlePurchaseConfirm(message, content);
-      } else if (content === JOIN_LINK_COMMAND || content === JOIN_LINK_ROTATE_COMMAND || content === RC_ADMIN_COMMAND) {
+      } else if (content === JOIN_LINK_COMMAND || content === JOIN_LINK_ROTATE_COMMAND || content === RC_ADMIN_COMMAND || content === RC_CALENDAR_COMMAND) {
         await handleRcOwnerCommand(message, content);
       } else if (EBOOK_FREE_COMMANDS.includes(content)) {
         await handleFreeFilesRequest(message);
@@ -2447,6 +2447,7 @@ const PURCHASE_CONFIRM_COMMAND = "!구매확인"; // 로그인 연동(OAuth) 없
 const JOIN_LINK_COMMAND = "!구매링크"; // 운영자: 랜딩페이지에 넣을 입장 링크 확인
 const JOIN_LINK_ROTATE_COMMAND = "!구매링크재발급"; // 운영자: 링크가 새어나갔을 때 재발급
 const RC_ADMIN_COMMAND = "!챌린지관리"; // 운영자: 관리 페이지 주소
+const RC_CALENDAR_COMMAND = "!캘린더"; // 운영자: 7일차·30일차 분석 일정 캘린더 구독 주소
 
 const rcApi = require("./lib/rc").init({
   app,
@@ -2608,12 +2609,18 @@ async function handleRcOwnerCommand(message, content) {
           : "⚠️ DISCORD_CLIENT_SECRET이 없어서 로그인 연동이 꺼져 있어요. 지금은 링크를 열면 \"!구매확인 코드\" 안내만 나와요.") +
         `\n링크가 새어나갔다면 "${JOIN_LINK_ROTATE_COMMAND}"로 재발급하세요(이미 들어온 분은 그대로).`
     );
+  } else if (content === RC_CALENDAR_COMMAND) {
+    await message.reply(
+      `7일차·30일차 분석 일정 캘린더 구독 주소예요 (운영자만 보세요) 👇\n${rcApi.calUrl()}\n\n` +
+        `구글 캘린더 → 왼쪽 "다른 캘린더 +" → "URL로 추가"에 붙여넣으면 끝이에요. 새 참가자가 들어오면 일정이 자동으로 추가돼요(반영에 몇 시간~하루 걸릴 수 있어요).\n` +
+        `주소가 새어나갔다면 관리 페이지에서 "캘린더 주소 재발급"을 누르세요.`
+    );
   } else if (content === JOIN_LINK_ROTATE_COMMAND) {
     rcApi.rotateJoinToken();
     await message.reply(`입장 링크를 재발급했어요. 이전 링크는 이제 안 열려요. 랜딩페이지의 주소도 바꿔주세요 👇\n${rcApi.joinUrl()}`);
   } else {
     const st = rcApi.stats();
-    await message.reply(`챌린지 관리 페이지예요 (이 주소는 운영자만 보세요) 👇\n${rcApi.adminUrl()}\n\n참가자 ${st.total}명 · 진행 중 ${st.active}명 · 쉬는 중 ${st.paused}명 · 완주 ${st.completed}명 · 안 읽은 기록 ${st.unread}건`);
+    await message.reply(`챌린지 관리 페이지예요 (이 주소는 운영자만 보세요) 👇\n${rcApi.adminUrl()}\n\n참가자 ${st.total}명 · 진행 중 ${st.active}명 · 쉬는 중 ${st.paused}명 · 완주 ${st.completed}명 · 안 읽은 기록 ${st.unread}건 · 분석 대기 ${st.pendingAnalysis}건`);
   }
 }
 
