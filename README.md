@@ -70,3 +70,35 @@ npm start
 - 데이터는 `challenge.json`(영구 볼륨의 DATA_DIR)에 저장되고, 참가자는 폼 화면에서 자기 기록을 직접 삭제할 수 있습니다.
 - DM 명령어: 참가자 `!챌린지시작`(내 링크 다시 받기/쉬었다 재개), `챌린지그만`(쉬기), `!구매확인 <코드>`(로그인 연동 없이 입장) · 운영자 `!구매링크`, `!구매링크재발급`, `!챌린지관리`, `!챌린지통계`.
 - 설정 값은 `env.example`의 "전자책 구매자 전용 30일 리부트 챌린지" 항목을 보세요.
+
+### 구매자별 1회용 입장 링크 · 환불 회수 (랜딩 서버 연동)
+
+랜딩 서버가 결제를 확인한 직후 봇을 호출하면, 구매 1건마다 **추측 불가능한 1회용 입장 링크**(`/join/<64자 토큰>`)가 발급됩니다. 링크는 처음 로그인한 디스코드 계정 1개에만 연결되고(주문번호 `orderNo`가 유일한 연결 키), 다른 계정이 열면 "이미 사용된 링크"로 막히며, 같은 계정이 다시 열면 자기 챌린지 페이지로 돌아갑니다. 이메일·전화번호 같은 개인정보는 받지도 저장하지도 않습니다. 환불이 나면 같은 방식으로 호출해 링크 무효화 · 등급 회수 · 기록 삭제를 한 번에 처리합니다.
+
+**환경변수**: `LANDING_BOT_SECRET`(랜딩과 공유하는 서명 비밀키, 없으면 API 꺼짐), `LEGACY_JOIN_ENABLED`(기본 `true`; `false`면 예전 공용 링크와 `!구매확인` 차단), `PUBLIC_BASE_URL`(링크의 기준 주소, 필수).
+
+**서명**: 헤더 `X-Signature: sha256=<hex>`, 값은 `HMAC-SHA256(LANDING_BOT_SECRET, "<ts>." + <요청 본문 원문 문자열>)`. 본문의 `ts`(유닉스 초)는 현재 시각 ±5분 이내여야 하고, 서명은 상수시간 비교로 검증합니다. 본문은 보낸 문자열 그대로 서명하세요(서명 후 다시 직렬화하면 안 됩니다).
+
+```js
+// 랜딩 서버(Node) 예시
+const crypto = require("crypto");
+async function callBot(path, payload) {
+  const body = JSON.stringify({ ...payload, ts: Math.floor(Date.now() / 1000) });
+  const ts = JSON.parse(body).ts;
+  const sig = crypto.createHmac("sha256", process.env.LANDING_BOT_SECRET).update(`${ts}.${body}`).digest("hex");
+  const r = await fetch(process.env.BOT_BASE_URL + path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Signature": "sha256=" + sig },
+    body,
+  });
+  return r.json();
+}
+// 결제 검증 직후: const { joinUrl } = await callBot("/api/purchases", { orderNo });
+// 환불 직후:      await callBot(`/api/purchases/${orderNo}/revoke`, { orderNo, reason: "고객 환불" });
+```
+
+- `POST /api/purchases` — 본문 `{ "orderNo": "…", "ts": 1760000000 }` → `200 { "ok": true, "joinUrl": "<PUBLIC_BASE_URL>/join/<토큰>", "status": "issued" | "claimed" }`. 같은 `orderNo`로 다시 부르면 같은 링크를 돌려줍니다(멱등). 환불된 주문이면 `409 { "ok": false, "status": "revoked" }`. `orderNo`는 영문·숫자·`_`·`-` 1~64자.
+- `POST /api/purchases/:orderNo/revoke` — 본문 `{ "ts": …, "reason": "…", "orderNo": "…(권장, 경로와 같아야 함)" }` → `200 { "ok": true, "status": "revoked", "alreadyRevoked": false }`. 링크 무효화, 연결된 계정이 있으면 리부트-크루·마스터-크루 등급 회수 + 챌린지 기록·개인 주소 삭제(개인 주소는 "환불된 구매" 안내만 보임) + 매일 DM 중단 + 운영자 DM. 여러 번 불러도 안전합니다. 같은 계정에 유효한 다른 주문이 남아 있으면 등급·기록은 그대로 둡니다.
+- 오류: `400`(잘못된 요청/`orderNo`), `401`(서명 불일치·시간 초과), `409`(환불된 주문), `429`(요청 과다), `503`(`LANDING_BOT_SECRET`/`PUBLIC_BASE_URL` 미설정). 응답은 모두 `Cache-Control: no-store`이고, 토큰·비밀키·기록은 로그에 남기지 않습니다.
+
+**Day 0 동의문**: 버전(`lib/rc-content.js`의 `CONSENT_VERSION`)과 동의 시각을 참가자별 `consent: { version, at }`로 저장합니다(서버가 기록, 클라이언트 값은 무시). 문구를 바꾸면 버전을 올리세요. 이전 동의자는 그대로 두고 관리자 참가자 화면에 `v1(이전)`으로 표시됩니다. 내용은 랜딩 개인정보처리방침 제14조와 같아야 합니다.
