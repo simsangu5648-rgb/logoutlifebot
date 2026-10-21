@@ -2479,6 +2479,17 @@ const rcApi = require("./lib/rc").init({
         return false;
       }
     },
+    // 통계 이미지 카드가 붙은 DM (7일·30일 분석 리포트). 실패하면 rc.js가 글만 보냅니다.
+    dmUserImage: async (uid, text, buffer, name) => {
+      try {
+        const u = await client.users.fetch(uid);
+        await u.send({ content: String(text).slice(0, 1990), files: [new AttachmentBuilder(buffer, { name: name || "report.png" })] });
+        return true;
+      } catch (e) {
+        console.warn(`[챌린지 이미지 DM 실패] ${uid} - ${e && e.message}`);
+        return false;
+      }
+    },
     // 로그인한 구매자를 서버에 자동 입장시킵니다(이미 멤버면 그대로 둠).
     joinGuild: async (uid, accessToken) => {
       const guild = await client.guilds.fetch(GUILD_ID);
